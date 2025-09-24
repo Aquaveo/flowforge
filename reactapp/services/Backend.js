@@ -12,19 +12,7 @@ export default class Backend {
 
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
 
-    if (port) {
-      this.wsUrl = `${protocol}://${hostname}:${port}${window.location.pathname}ws/`;
-    } else {
-      this.wsUrl = `${protocol}://${hostname}${window.location.pathname}ws/`;
-    }
-
-
-    // Derive the app root like: /apps/<slug>/
-    // const match = window.location.pathname.match(/^(.*?\/apps\/[^/]+\/)/);
-    // const appRoot = match ? match[1] : "/";
-    // const consumer = String(consumerPath).replace(/^\/|\/$/g, "");
-    // const hostWithPort = port ? `${hostname}:${port}` : hostname;
-    // this.wsUrl = `${protocol}://${hostWithPort}${appRoot}${consumer}/ws/`;
+    this.wsUrl = port ? `${protocol}://${hostname}:${port}${window.location.pathname}ws/` : `${protocol}://${hostname}${window.location.pathname}ws/` ;
 
     this.rootUrl = rootUrl;
     this.webSocket = null;

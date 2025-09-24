@@ -14,7 +14,7 @@ from tethysapp.flowforge.app import App
 log = logging.getLogger(__name__)
 
 
-@consumer(name="workflows", url="workflows")
+@consumer(name="flowforge", url="flowforge")
 class BackendConsumer(AsyncConsumer):
     """
     Channels AsyncConsumer that multiplexes actions to registered handlers.
