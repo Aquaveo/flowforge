@@ -1,0 +1,287 @@
+import React, { useEffect, useMemo, useReducer, useRef, useContext, useState } from 'react';
+import { WorkflowsContext } from '../contexts/workflowsContext';
+import { workflowsReducer, initialState } from '../store/reducers/workflowsReducer';
+import { types } from '../store/actions/actionsTypes';
+import dagre from 'dagre';
+import { AppContext } from 'context/context';
+import { toast } from 'react-toastify';
+
+// ---- helpers (unchanged dagre + cycle) ----
+function createsCycle(source, target, edges) {
+  if (source === target) return true;
+  const adj = new Map();
+  edges.forEach(e => {
+    if (!adj.has(e.source)) adj.set(e.source, []);
+    adj.get(e.source).push(e.target);
+  });
+  const stack = [target], seen = new Set();
+  while (stack.length) {
+    const cur = stack.pop();
+    if (cur === source) return true;
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    (adj.get(cur) ?? []).forEach(n => stack.push(n));
+  }
+  return false;
+}
+function layoutWithDagre(nodes, edges, { rankdir = 'LR', nodesep = 60, ranksep = 90 } = {}) {
+  const g = new dagre.graphlib.Graph(); g.setGraph({ rankdir, nodesep, ranksep }); g.setDefaultEdgeLabel(() => ({}));
+  nodes.forEach((n) => { g.setNode(n.id, { width: 200, height: 56 }); });
+  edges.forEach((e) => g.setEdge(e.source, e.target));
+  dagre.layout(g);
+  return nodes.map((n) => { const p = g.node(n.id); return { ...n, position: { x: p.x - (p.width/2), y: p.y - (p.height/2) } }; });
+}
+
+// Weak connectivity check for “full run” (no selection) — per your rule #4.
+// React Flow shows a similar concept in their cycle/validation docs. :contentReference[oaicite:7]{index=7}
+function isWeaklyConnected(nodes, edges) {
+  if (nodes.length === 0) return false;
+  const ids = nodes.map(n => n.id);
+  const idx = Object.fromEntries(ids.map((id, i) => [id, i]));
+  const adj = ids.map(() => []);
+  edges.forEach(e => {
+    if (e.source in idx && e.target in idx) {
+      const a = idx[e.source], b = idx[e.target];
+      adj[a].push(b); adj[b].push(a);
+    }
+  });
+  const seen = new Set([0]);
+  const stack = [0];
+  while (stack.length) {
+    const u = stack.pop();
+    for (const v of adj[u]) if (!seen.has(v)) { seen.add(v); stack.push(v); }
+  }
+  return seen.size === ids.length;
+}
+
+export function WorkflowsProvider({ children }) {
+  const [state, dispatch] = useReducer(workflowsReducer, initialState);
+  const { backend } = useContext(AppContext);
+  const [uiMode, setUiMode] = useState('real');
+
+  // local helpers to mirror reducer behavior
+  const labelFor = (kind) => {
+    if (kind === 'pre-process') return 'pre-process';
+    if (kind === 'calibration-config') return 'calibration-config';
+    if (kind === 'calibration-run') return 'calibration-run';
+    if (kind === 'run-ngiab') return 'run ngiab';
+    if (kind === 'teehr') return 'teehr';
+    return kind;
+  };
+  const normalizeKind = (k) => {
+    if (k === 'ngiab-run') return 'run-ngiab';     // align with the rest of the app
+    if (k === 'ngiab-teehr') return 'teehr';
+    return k;
+  };
+
+  const templateChains = {
+    'pre->cfg'                     : ['pre-process','calibration-config'],
+    'pre->cfg->cal'                : ['pre-process','calibration-config','calibration-run'],
+    'pre->run'                     : ['pre-process','ngiab-run'],
+    'pre->run->teehr'              : ['pre-process','ngiab-run','ngiab-teehr'],
+    'pre->cfg->cal->run->teehr'    : ['pre-process','calibration-config','calibration-run','ngiab-run','ngiab-teehr'],
+    'cfg->cal'                     : ['calibration-config','calibration-run'],
+    'cfg->cal->run'                : ['calibration-config','calibration-run','ngiab-run'],
+    'cfg->cal->run->teehr'         : ['calibration-config','calibration-run','ngiab-run','ngiab-teehr'],
+    'cal->run'                     : ['calibration-run','ngiab-run'],
+    'cal->run->teehr'              : ['calibration-run','ngiab-run','ngiab-teehr'],
+    'run->teehr'                   : ['ngiab-run','ngiab-teehr'],
+  };
+
+ const makeGraphFromChain = (chain) => {
+   const uniq = Array.from(new Set(chain)).map(normalizeKind);
+   const nodes = uniq.map((id, i) => ({
+     id,
+     type: 'process',                   // <- make it your custom node
+     position: { x: 0, y: 0 },          // will be laid out after
+     data: { label: labelFor(id), status: 'idle', config: {} },
+     selected: false,
+   }));
+   const edges = uniq.slice(1).map((to, i) => {
+     const from = uniq[i];
+     return { id: `e-${from}-${to}`, source: from, target: to };
+   });
+   return { nodes, edges };
+ };
+
+
+  const applyTemplate = (key) => {
+    const chain = templateChains[key];
+    if (!chain) return;
+    const { nodes, edges } = makeGraphFromChain(chain);
+    dispatch({ type: types.SET_GRAPH, payload: { nodes, edges } });
+   // keep shape consistent with onWorkflowGraph normalization
+    const layouted = layoutWithDagre(nodes, edges, { rankdir: 'LR', nodesep: 60, ranksep: 90 });
+    dispatch({ type: types.SET_EDGES, payload: edges });
+    dispatch({ type: types.SET_NODES, payload: layouted });
+
+  };
+
+  useEffect(() => {
+    if (!backend) return;
+    const isOpenNow = backend.webSocket?.readyState === 1;
+    if (isOpenNow) {
+      dispatch({ type: types.WS_CONNECTED });
+      // request workflows immediately if already open
+      try { backend?.do(backend?.actions?.LIST_WORKFLOWS ?? 'LIST_WORKFLOWS', {}); } catch {}
+    }
+
+    const onOpen = () => dispatch({ type: types.WS_CONNECTED });
+    const onClose = () => dispatch({ type: types.WS_DISCONNECTED });
+    const onNodeStatus = (payload) => {
+      const { nodeId, status, message = '' } = payload ?? {};
+      if (nodeId && status) {
+        dispatch({ type: types.UPDATE_NODE_STATUS, payload: { nodeId, status, message } });
+      }
+      dispatch({ type: types.WS_MESSAGE, payload: { type: 'NODE_STATUS', ...payload } });
+    };
+
+    const onWorkflowSubmitted = (payload) =>
+        dispatch({ type: types.WS_MESSAGE, payload: { type: 'WORKFLOW_SUBMITTED', ...payload } });
+
+    const onWorkflowsList = (payload) => {
+      dispatch({ type: types.WS_MESSAGE, payload: { type: 'WORKFLOWS_LIST', ...payload } });
+      toast.success(`Loaded ${payload?.count ?? 0} workflows`);
+    };
+
+    const onWorkflowGraph = (payload) => {
+      const srcNodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
+      const srcEdges = Array.isArray(payload?.edges) ? payload.edges : [];
+      // Normalize to React Flow shapes (id/type/position/data)
+      const rfNodes = srcNodes.map((n, i) => ({
+        id: String(n.id ?? `n-${i}`),
+        type: 'process',
+        position: { x: 0, y: 0 },
+        data: {
+          label: n.label ?? String(n.id ?? `n-${i}`),
+          status: n.status ?? 'idle',
+          config: n.config ?? {},
+        },
+      }));
+      const rfEdges = srcEdges.map((e, i) => ({
+        id: `e-${e.source}-${e.target}-${i}`,
+        source: String(e.source),
+        target: String(e.target),
+      }));
+      // Layout (LR by default); React Flow recommends mapping positions from dagre result. :contentReference[oaicite:1]{index=1}
+      const layouted = layoutWithDagre(rfNodes, rfEdges, { rankdir: 'LR', nodesep: 60, ranksep: 90 });
+      dispatch({ type: types.SET_EDGES, payload: rfEdges });
+      dispatch({ type: types.SET_NODES, payload: layouted });
+      const name = payload?.workflow?.name ?? 'workflow';
+      const n = rfNodes.length, m = rfEdges.length;
+      toast.info(`Opened "${name}" • ${n} node${n===1?'':'s'}, ${m} edge${m===1?'':'s'}`);
+    };
+
+    backend.on('WS_CONNECTED', onOpen);
+    backend.on('WS_DISCONNECTED', onClose);
+    backend.on('NODE_STATUS', onNodeStatus);
+    backend.on('WORKFLOWS_LIST', onWorkflowsList);
+    backend.on('WORKFLOW_GRAPH', onWorkflowGraph);
+    backend.on('WORKFLOW_SUBMITTED', onWorkflowSubmitted);
+    backend.on('WORKFLOW_RESULT', (p) => {
+      const url = p?.s3url;
+      if (url) {
+        // React-Toastify can render JSX (links/components) inside a toast. :contentReference[oaicite:4]{index=4}
+        toast.success(
+          <span>Workflow finished. Results at <code>{url}</code></span>,
+          { autoClose: 7000 }
+        );
+      }
+    });
+
+    return () => {
+      backend.off('WS_CONNECTED'); 
+      backend.off('WS_DISCONNECTED');
+      backend.off('NODE_STATUS');
+      backend.off('WORKFLOWS_LIST');
+      backend.off('WORKFLOW_GRAPH');
+      backend.off('WORKFLOW_SUBMITTED');
+      backend.off('WORKFLOW_RESULT');
+    };
+  }, [backend]);
+
+  // public API
+  const addNode = (kind) => dispatch({ type: types.ADD_NODE, payload: { kind } });
+  const removeSelected = () => dispatch({ type: types.REMOVE_SELECTED });
+
+  const autoLayout = (dir = 'LR') => {
+    const layouted = layoutWithDagre(state.nodes, state.edges, { rankdir: dir });
+    dispatch({ type: types.SET_NODES, payload: layouted });
+  };
+
+  const isValidConnection = (conn) => {
+    const exists = state.edges.some(e => e.source === conn.source && e.target === conn.target);
+    if (exists) return false;
+    return !createsCycle(conn.source, conn.target, state.edges);
+  };
+
+  const runWorkflow = () => {
+    const nodes = state.nodes.map(n => ({
+      id: n.id, label: n.data?.label, config: n.data?.config || {}
+    }));
+    const edges = state.edges.map(e => ({ source: e.source, target: e.target }));
+    const selectedIds = state.nodes.filter(n => n.selected).map(n => n.id);
+
+    // Full-run rule: require weak connectivity (single component)
+    if (selectedIds.length === 0) {
+      if (!isWeaklyConnected(state.nodes, state.edges)) {
+        dispatch({ type: types.WS_ERROR, payload: 'Cannot run: not all nodes are connected.' });
+        return;
+      }
+    }
+
+    const payload = {
+      workflow: { nodes, edges },
+      selected: selectedIds,
+      workflowId: state.ui?.selectedWorkflowId || null,
+      mode: uiMode,
+    };
+
+    try {
+      backend?.do(backend?.actions?.RUN_WORKFLOW ?? 'RUN_WORKFLOW', payload);
+      dispatch({ type: types.WORKFLOW_SENT });
+
+      // optimistic: mark the targeted nodes as running right away
+      const runIds = new Set(selectedIds.length ? selectedIds : state.nodes.map(n => n.id));
+      state.nodes.forEach(n => {
+        if (runIds.has(n.id)) {
+          dispatch({ type: types.UPDATE_NODE_STATUS, payload: { nodeId: n.id, status: 'running', message: 'submitting...' } });
+        }
+      });
+
+    } catch {
+      dispatch({ type: types.WS_ERROR, payload: 'Failed to send workflow' });
+    }
+  };
+
+  // playback & misc unchanged
+
+  const startPlayback = () => dispatch({ type: types.PLAYBACK_START });
+  const resetPlayback = () => dispatch({ type: types.PLAYBACK_RESET });
+  const setSelectedWorkflow = (id) =>
+    {
+      dispatch({ type: types.SET_SELECTED_WORKFLOW, payload: id });
+      // ask backend for the graph
+      try { backend?.do(backend?.actions?.GET_WORKFLOW ?? 'GET_WORKFLOW', { id }); } catch {}
+    }
+  // timer for playback
+  const timerRef = useRef(null);
+  useEffect(() => {
+    if (state.playback.playing && !timerRef.current) {
+      timerRef.current = setInterval(() => dispatch({ type: types.PLAYBACK_TICK }), 700);
+    }
+    if (!state.playback.playing && timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    return () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
+  }, [state.playback.playing]);
+
+  const value = useMemo(() => ({
+    state, dispatch,
+    runWorkflow, autoLayout, isValidConnection,
+    addNode, removeSelected, applyTemplate,
+    startPlayback, resetPlayback,
+    setSelectedWorkflow,
+    uiMode, setUiMode,
+  }), [state, uiMode]);
+
+  return <WorkflowsContext.Provider value={value}>{children}</WorkflowsContext.Provider>;
+}

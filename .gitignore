@@ -1,0 +1,17 @@
+*.pydevproject
+*.project
+*.egg-info
+*.class
+*.pyo
+*.pyc
+*.db
+*.sqlite
+*.DS_Store
+.idea/
+dist/*
+build/*
+services.yml
+node_modules*
+tethysapp/flowforge/public/frontend/
+tethysapp/flowforge/workspaces/
+reactapp/config/production.env

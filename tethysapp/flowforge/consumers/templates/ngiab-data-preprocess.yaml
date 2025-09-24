@@ -1,0 +1,126 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: ngiab-data-preprocess
+  namespace: argo
+spec:
+  entrypoint: main
+  templates:
+  - name: main
+    inputs:
+      parameters:
+        - { name: output_bucket,  default: "test-ngen" }
+        - { name: output_prefix,  default: "demo/default" }
+        - { name: selector_type,  default: "gage" }
+        - { name: selector_value, default: "01359139" }
+        - { name: vpu,            default: "" }
+        - { name: start_date,     default: "2020-01-01" }
+        - { name: end_date,       default: "2020-01-15" }
+        - { name: output_name,    default: "ngiab" }
+        - { name: source,         default: "nwm" }
+        - { name: debug,          default: "false" }
+        - { name: all,        default: "false" }
+        - { name: subset,     default: "true" }
+        - { name: forcings,   default: "true" }
+        - { name: realization,default: "true" }
+        - { name: run,        default: "false" }
+        - { name: validate,   default: "false" }
+
+    script:
+      image: ghcr.io/astral-sh/uv:python3.11-bookworm-slim
+      command: [bash, -lc]
+      resources:
+        requests:
+          cpu: "2"
+          memory: "8Gi"
+        limits:
+          memory: "8Gi"
+      source: |
+        set -euo pipefail
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -y && apt-get install -y --no-install-recommends \
+          curl ca-certificates findutils coreutils gzip tar && \
+          rm -rf /var/lib/apt/lists/*
+
+        SEL="{{inputs.parameters.selector_type}}"
+        VAL="{{inputs.parameters.selector_value}}"
+        VPU="{{inputs.parameters.vpu}}"
+        START="{{inputs.parameters.start_date}}"
+        END="{{inputs.parameters.end_date}}"
+        OUT="{{inputs.parameters.output_name}}"
+        SRC="{{inputs.parameters.source}}"
+        DBG="{{inputs.parameters.debug}}"
+
+        DO_ALL="{{inputs.parameters.all}}"
+        DO_SUB="{{inputs.parameters.subset}}"
+        DO_FOR="{{inputs.parameters.forcings}}"
+        DO_REAL="{{inputs.parameters.realization}}"
+        DO_RUN="{{inputs.parameters.run}}"
+        DO_VALID="{{inputs.parameters.validate}}"
+
+        IDFLAG="-i"
+        IDVAL="$VAL"
+        case "$SEL" in
+          gage)      case "$IDVAL" in gage-*) ;; *) IDVAL="gage-$IDVAL" ;; esac ;;
+          catchment) case "$IDVAL" in cat-*)  ;; *) IDVAL="cat-$IDVAL"  ;; esac ;;
+          latlon)    IDFLAG="-l" ;;
+        esac
+
+        STEPS=""
+        if [ "$DO_ALL" = "true" ]; then
+          STEPS="-sfr"; DO_RUN="true"
+        else
+          [ "$DO_SUB"  = "true" ] && STEPS="${STEPS}s"
+          [ "$DO_FOR"  = "true" ] && STEPS="${STEPS}f"
+          [ "$DO_REAL" = "true" ] && STEPS="${STEPS}r"
+          [ -n "$STEPS" ] && STEPS="-$STEPS" || STEPS=""
+        fi
+
+        [ -n "$VPU" ] && VPUFLAG="--vpu $VPU" || VPUFLAG=""
+        [ "$DBG"      = "true" ] && DBGFLAG="-D" || DBGFLAG=""
+        [ "$DO_RUN"   = "true" ] && RUNFLAG="--run" || RUNFLAG=""
+        [ "$DO_VALID" = "true" ] && VALIDFLAG="--validate" || VALIDFLAG=""
+
+        set +o pipefail
+        yes "" | uvx ngiab-prep \
+          $IDFLAG "$IDVAL" $STEPS $RUNFLAG $VALIDFLAG $DBGFLAG $VPUFLAG \
+          --start "$START" --end "$END" \
+          -o "$OUT" \
+          --source "$SRC"
+        set -o pipefail
+
+        OUTROOT="${HOME}/ngiab_preprocess_output"
+        TARGET="${OUTROOT}/${OUT}"
+
+        if [ ! -d "$TARGET" ]; then
+          mkdir -p "$TARGET"
+          NEWEST="$(find "$OUTROOT" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2- || true)"
+          [ -n "${NEWEST:-}" ] && cp -a "${NEWEST}/." "${TARGET}/" || true
+        fi
+
+        mkdir -p /tmp/out
+        printf "%s\n" "{{inputs.parameters.output_bucket}}" > /tmp/out/.s3_bucket
+        printf "%s\n" "{{inputs.parameters.output_prefix}}/{{inputs.parameters.output_name}}.tgz" > /tmp/out/.s3_key
+        printf "s3://%s/%s\n" "{{inputs.parameters.output_bucket}}" "{{inputs.parameters.output_prefix}}/{{inputs.parameters.output_name}}.tgz" > /tmp/out/.s3_url
+
+        echo "Final staged directory: ${TARGET}"
+        ls -lah "$TARGET" || true
+
+    outputs:   # <— SIBLING of 'script', not nested inside it
+      parameters:
+        - name: preprocess_bucket
+          valueFrom: { path: /tmp/out/.s3_bucket }
+        - name: preprocess_s3_key
+          valueFrom: { path: /tmp/out/.s3_key }
+        - name: preprocess_s3_url
+          valueFrom: { path: /tmp/out/.s3_url }
+      artifacts:
+        - name: preprocess
+          path: /root/ngiab_preprocess_output/{{inputs.parameters.output_name}}  # directory
+          s3:
+            endpoint: s3.amazonaws.com
+            region: us-east-1
+            bucket: "{{inputs.parameters.output_bucket}}"
+            key: "{{inputs.parameters.output_prefix}}/{{inputs.parameters.output_name}}.tgz"
+            accessKeySecret: { name: aws-creds, key: AWS_ACCESS_KEY_ID }
+            secretKeySecret:  { name: aws-creds, key: AWS_SECRET_ACCESS_KEY }

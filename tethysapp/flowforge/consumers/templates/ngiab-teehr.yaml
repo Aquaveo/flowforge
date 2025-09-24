@@ -1,0 +1,183 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: ngiab-teehr
+  namespace: argo
+spec:
+  entrypoint: main
+  templates:
+  - name: main
+    inputs:
+      parameters:
+        - { name: output_bucket,         default: "test-ngen" }
+        - { name: output_prefix,         default: "demo/default" }
+        - { name: final_prefix,          default: "" }
+        - { name: input_bucket,          default: "test-ngen" }
+        - { name: input_s3_key,          default: "" }     # chained S3 object key (file)
+        - { name: input_s3_url,          default: "" }     # standalone s3://... or https://...
+        - { name: teehr_inputs_subdir,   default: "outputs" }
+        - { name: teehr_results_subdir,  default: "teehr" }
+        - { name: teehr_args,            default: "" }
+        - { name: image_teehr,           default: "awiciroh/ngiab-teehr:x86" }
+    script:
+      image: "{{inputs.parameters.image_teehr}}"
+      command: [bash, -lc]
+      env:
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom: { secretKeyRef: { name: aws-creds, key: AWS_ACCESS_KEY_ID } }
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom: { secretKeyRef: { name: aws-creds, key: AWS_SECRET_ACCESS_KEY } }
+        - name: AWS_DEFAULT_REGION
+          value: us-east-1
+      source: |
+        set -euo pipefail
+
+        # tools (aws, curl) ...
+        ensure_tools() {
+          if command -v apt-get >/dev/null 2>&1; then
+            apt-get update -y && apt-get install -y --no-install-recommends unzip curl ca-certificates procps || true
+          elif command -v dnf >/dev/null 2>&1; then dnf install -y unzip curl ca-certificates || true
+          elif command -v yum >/dev/null 2>&1; then yum install -y unzip curl ca-certificates || true
+          fi
+          if ! command -v aws >/dev/null 2>&1; then
+            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+            unzip -q /tmp/awscliv2.zip -d /tmp
+            /tmp/aws/install -i /usr/local/aws-cli -b /usr/local/bin
+          fi
+        }
+        log() { printf '%s %s\n' "[TEEHR]" "$*" ; }
+
+        unpack_nested() {
+          local found=1
+          while [ $found -eq 1 ]; do
+            found=0
+            while IFS= read -r -d '' f; do
+              echo "Unpacking nested archive: $f"
+              log "Unpacking nested archive: $f"
+              local d; d="$(dirname "$f")"
+              tar -xzf "$f" -C "$d" 2>/dev/null || tar -xf "$f" -C "$d"
+              rm -f "$f"
+              found=1
+            done < <(find /app/data -type f \( -name '*.tgz' -o -name '*.tar.gz' -o -name '*.tar' \) -print0)
+          done
+        }
+
+        mkdir -p /app/data "/app/data/{{inputs.parameters.teehr_inputs_subdir}}" "/app/data/{{inputs.parameters.teehr_results_subdir}}"
+
+        # --- Fetch dataset (chained or standalone) ---
+        ensure_tools
+        if [ -n "{{inputs.parameters.input_s3_key}}" ]; then
+          echo "aws s3 cp s3://{{inputs.parameters.input_bucket}}/{{inputs.parameters.input_s3_key}} /tmp/in.tgz"
+          log "S3 get: s3://{{inputs.parameters.input_bucket}}/{{inputs.parameters.input_s3_key}} -> /tmp/in.tgz"
+          aws s3 cp "s3://{{inputs.parameters.input_bucket}}/{{inputs.parameters.input_s3_key}}" /tmp/in.tgz --no-progress
+          tar -C /app/data -xzf /tmp/in.tgz 2>/dev/null || tar -C /app/data -xf /tmp/in.tgz
+        elif [ -n "{{inputs.parameters.input_s3_url}}" ]; then
+          if echo "{{inputs.parameters.input_s3_url}}" | grep -q '^s3://'; then
+            aws s3 cp "{{inputs.parameters.input_s3_url}}" /tmp/in.tgz --no-progress
+          else
+            curl -fL "{{inputs.parameters.input_s3_url}}" -o /tmp/in.tgz
+          fi
+          [ -s /tmp/in.tgz ] || { echo "No dataset found"; exit 2; }
+          tar -C /app/data -xzf /tmp/in.tgz 2>/dev/null || tar -C /app/data -xf /tmp/in.tgz
+        else
+          echo "No input provided (input_s3_key/input_s3_url)."
+          exit 2
+        fi
+
+        # explode any inner archives
+        unpack_nested
+
+        # ---- Normalize common top-level folders so /app/data/config exists ----
+        for top in "ngiab" "ngen-run" "run-ngiab"; do
+          if [ ! -d /app/data/config ] && [ -d "/app/data/${top}/config" ]; then
+            log "Flattening top-level folder: ${top}/ -> /app/data/"
+            shopt -s dotglob; mv "/app/data/${top}/"* /app/data/ || true; rmdir "/app/data/${top}" || true
+          fi
+        done
+
+        # ---- Locate dataset root (directory that contains config/) ----
+        DATA_DIR=""
+        if [ -d /app/data/config ]; then
+          DATA_DIR="/app/data"
+        else
+          DATA_DIR="$(find /app/data -mindepth 1 -maxdepth 2 -type d -exec test -d '{}/config' ';' -print -quit || true)"
+        fi
+        log "Candidate DATA_DIR=${DATA_DIR:-<none>}"
+        if [ -n "$DATA_DIR" ]; then
+          ls -lah "$DATA_DIR/config" || true
+        fi
+        REAL="${DATA_DIR}/config/realization.json"
+        if [ -z "$DATA_DIR" ] || [ ! -f "$REAL" ]; then
+          log "Missing realization.json under /app/data after extract."
+          log "Searching for any realization.json ..."
+          ALT="$(find /app/data -maxdepth 4 -type f -name 'realization.json' | head -n1 || true)"
+          if [ -n "$ALT" ]; then
+            DATA_DIR="$(dirname "$(dirname "$ALT")")"
+            REAL="${DATA_DIR}/config/realization.json"
+            log "Using fallback DATA_DIR=$DATA_DIR"
+          else
+            find /app/data -maxdepth 3 -type d -print || true
+            exit 2
+          fi
+        fi
+        log "Confirmed realization: $REAL"
+
+        # ---- Resolve inputs (usually <DATA_DIR>/outputs) ----
+        INPUT_DIR_CANDIDATES=(
+          "$DATA_DIR/{{inputs.parameters.teehr_inputs_subdir}}"
+          "$DATA_DIR/outputs"
+        )
+        INPUT_DIR=""
+        for d in "${INPUT_DIR_CANDIDATES[@]}"; do [ -d "$d" ] && INPUT_DIR="$d" && break; done
+        [ -n "$INPUT_DIR" ] || { log "No outputs/ found under $DATA_DIR"; exit 2; }
+
+        # ---- Results live under dataset root, not hard-coded /app/data ----
+        RESULTS_DIR="$DATA_DIR/{{inputs.parameters.teehr_results_subdir}}"
+        mkdir -p "$RESULTS_DIR"
+
+        log "TEEHR DATA_DIR=$DATA_DIR"
+        log "TEEHR INPUT_DIR=$INPUT_DIR"
+        log "TEEHR RESULTS_DIR=$RESULTS_DIR"
+
+        cd /app
+        # Make teehr aware of dataset root explicitly
+        export NGEN_DATA_DIR="$DATA_DIR"
+        export NGEN_OUTPUTS_DIR="$INPUT_DIR"        
+        export TEEHR_INPUTS_DIR="$INPUT_DIR"
+        export TEEHR_RESULTS_DIR="$RESULTS_DIR"
+      
+        log "ENV NGEN_DATA_DIR=$NGEN_DATA_DIR"
+        log "ENV TEEHR_INPUTS_DIR=$TEEHR_INPUTS_DIR"
+        log "ENV TEEHR_RESULTS_DIR=$TEEHR_RESULTS_DIR"
+
+        if [ -n "{{inputs.parameters.teehr_args}}" ]; then
+          python -u teehr_ngen.py {{inputs.parameters.teehr_args}}
+        else
+          python -u teehr_ngen.py
+        fi
+
+        # flatten any archives created by the evaluator
+        unpack_nested
+        find "$RESULTS_DIR" -mindepth 1 -print -quit >/dev/null 2>&1 || : > "$RESULTS_DIR/_empty.txt"
+
+        # package FULL DATASET + TEEHR RESULTS under top 'ngiab/' folder
+        PKG="/tmp/pkg"; TOP="ngiab"
+        mkdir -p "$PKG/$TOP"
+    
+        shopt -s dotglob; cp -a /app/data/* "$PKG/$TOP"/
+        log "Packaging results -> /tmp/teehr_results.tgz (top=$TOP)"
+        tar -C "$PKG" -czf /tmp/teehr_results.tgz "$TOP"
+
+    outputs:
+      artifacts:
+        - name: teehr-results
+          path: /tmp/teehr_results.tgz
+          archive: { none: {} }   # <-- prevents tgz-inside-tgz
+          s3:
+            endpoint: s3.amazonaws.com
+            region: us-east-1
+            bucket: "{{inputs.parameters.output_bucket}}"
+            key: "{{inputs.parameters.output_prefix}}/teehr_results.tgz"
+            accessKeySecret: { name: aws-creds, key: AWS_ACCESS_KEY_ID }
+            secretKeySecret:  { name: aws-creds, key: AWS_SECRET_ACCESS_KEY }
+
