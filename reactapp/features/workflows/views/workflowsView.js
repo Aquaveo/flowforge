@@ -28,7 +28,7 @@ import '@xyflow/react/dist/style.css';
 
 const Layout = styled.div`
   display: flex;
-  gap: 18px;
+  gap: ${(props) => (props.$sidebarVisible ? '18px' : '0')};
   align-items: flex-start;
 `;
 
@@ -47,6 +47,10 @@ const Sidebar = styled.aside`
   max-height: calc(100vh - 64px);
   overflow-y: auto;
   backdrop-filter: blur(10px);
+  opacity: ${(props) => (props.$visible ? 1 : 0)};
+  pointer-events: ${(props) => (props.$visible ? 'auto' : 'none')};
+  transform: translateX(${(props) => (props.$visible ? '0' : '-40px')});
+  transition: opacity 220ms ease, transform 220ms ease;
 `;
 
 const SectionCard = styled.div`
@@ -343,7 +347,7 @@ const STATUS_THEME = {
   idle: { bg: 'rgba(59, 130, 246, 0.18)', color: '#dbeafe', label: 'Idle' },
 };
 
-function Toolbar() {
+function Toolbar({ sidebarVisible }) {
   const {
     addNode,
     removeSelected,
@@ -462,7 +466,7 @@ function Toolbar() {
   ];
 
   return (
-    <Sidebar>
+    <Sidebar $visible={sidebarVisible}>
       <SectionCard>
         <SectionHeader>
           <SectionTitle>My Workflows</SectionTitle>
@@ -577,11 +581,11 @@ function LayersPreview() {
   );
 }
 
-export default function WorkflowsView() {
+export default function WorkflowsView({ sidebarVisible = true } = {}) {
   return (
     <WorkflowsProvider>
-      <Layout>
-        <Toolbar />
+      <Layout $sidebarVisible={sidebarVisible}>
+        <Toolbar sidebarVisible={sidebarVisible} />
         <CanvasColumn>
           <Workflow />
           <LayersPreview />

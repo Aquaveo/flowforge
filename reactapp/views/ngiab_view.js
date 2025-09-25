@@ -1,4 +1,4 @@
-import { useState,Suspense, useContext  } from 'react';
+import { useState, Suspense } from 'react';
 import { HydroFabricProvider } from 'features/hydroFabric/providers/hydroFabricProvider';
 import { ModelRunsProvider } from 'features/ModelRuns/providers/modelRunsProvider';
 import { HydroFabricContainer, MapContainer } from 'components/StyledContainers';
@@ -8,7 +8,6 @@ import LoadingAnimation from 'components/loader/LoadingAnimation';
 import HydroFabricView from './hydroFabricView.js';
 import MapComponent from 'features/Map/components/mapgl.js';
 import ModelRunMenuView from 'features/ModelRuns/views/modelRunMenuView';
-import { AppContext } from "context/context";
 
 const ViewContainer = styled.div`
   height: 100%;
@@ -18,43 +17,53 @@ const ViewContainer = styled.div`
   overflow: hidden;
 `;
 
+const MapExperience = ({
+  singleRowOn,
+  toggleSingleRow,
+  setIsLoading,
+  isModelRunListOpen,
+  setIsModelRunListOpen,
+}) => (
+  <>
+    <MapContainer $fullScreen={singleRowOn}>
+      <MapComponent />
+    </MapContainer>
+    <ModelRunMenuView
+      toggleSingleRow={toggleSingleRow}
+      setIsLoading={setIsLoading}
+      setIsMenuOpen={setIsModelRunListOpen}
+      singleRowOn={singleRowOn}
+    />
+    <HydroFabricContainer
+      $fullScreen={singleRowOn}
+      isModelRunListOpen={isModelRunListOpen}
+    >
+      <Suspense fallback={<LoadingAnimation />}>
+        <HydroFabricView singleRowOn={singleRowOn} />
+      </Suspense>
+    </HydroFabricContainer>
+  </>
+);
+
 const NGIABView = () => {
-  const { backend } = useContext(AppContext);
-  
   const [singleRowOn, toggleSingleRow] = useState(true);
   const [isModelRunListOpen, setIsModelRunListOpen] = useState(true);
-  const [ _ , setIsLoading ] = useState(false);
+  const [_, setIsLoading] = useState(false);
 
   return (
     <ViewContainer>
-        <ModelRunsProvider>
-          <HydroFabricProvider>
-            <ToastContainer stacked  />
-              <MapContainer 
-                $fullScreen={singleRowOn} 
-              >
-                <MapComponent />
-              </MapContainer>
-              <ModelRunMenuView
-                  toggleSingleRow={toggleSingleRow} 
-                  setIsLoading={setIsLoading}
-                  setIsMenuOpen={setIsModelRunListOpen}
-                  singleRowOn={singleRowOn}
-              />
-              <HydroFabricContainer 
-                $fullScreen={singleRowOn} 
-                isModelRunListOpen={isModelRunListOpen}  
-              >
-                <Suspense fallback={<LoadingAnimation />}>
-                  <HydroFabricView 
-                    singleRowOn={singleRowOn} 
-                  />
-                </Suspense>
-              </HydroFabricContainer>
-          </HydroFabricProvider>
-        </ModelRunsProvider>
-
-
+      <ModelRunsProvider>
+        <HydroFabricProvider>
+          <ToastContainer stacked />
+          <MapExperience
+            singleRowOn={singleRowOn}
+            toggleSingleRow={toggleSingleRow}
+            setIsLoading={setIsLoading}
+            isModelRunListOpen={isModelRunListOpen}
+            setIsModelRunListOpen={setIsModelRunListOpen}
+          />
+        </HydroFabricProvider>
+      </ModelRunsProvider>
     </ViewContainer>
   );
 };

@@ -69,9 +69,23 @@ const ActiveUnderline = styled.span`
   transition: opacity 180ms ease, transform 180ms ease;
 `;
 
+const PanelsWrapper = styled.div`
+  position: relative;
+  flex: 1;
+  min-height: 0;
+`;
+
 const Panel = styled.div`
-  display: ${(props) => (props.$visible ? 'block' : 'none')};
+  position: absolute;
+  inset: 0;
   height: 100%;
+  width: 100%;
+  opacity: ${(props) => (props.$visible ? 1 : 0)};
+  pointer-events: ${(props) => (props.$visible ? 'auto' : 'none')};
+  transform: translateY(${(props) => (props.$visible ? '0' : '12px')});
+  transition: opacity 220ms ease, transform 220ms ease;
+  display: flex;
+  flex-direction: column;
 `;
 
 export default function FlowForgeExperience() {
@@ -97,14 +111,14 @@ export default function FlowForgeExperience() {
         })}
       </TabStrip>
 
-      <div style={{ flex: 1, minHeight: 0 }}>
+      <PanelsWrapper>
         <Panel $visible={activeTab === 'workflows'}>
-          <WorkflowsView />
+          <WorkflowsView sidebarVisible={activeTab === 'workflows'} />
         </Panel>
         <Panel $visible={activeTab === 'map'}>
           <NGIABView />
         </Panel>
-      </div>
+      </PanelsWrapper>
     </Container>
   );
 }

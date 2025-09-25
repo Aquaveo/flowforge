@@ -1,4 +1,4 @@
-import React, { Fragment, useState } from 'react';
+import React, { Fragment } from 'react';
 import styled from 'styled-components';
 import HydroFabricSelect from 'features/ngen/components/hydroFabricSelect';
 import OverlayTrigger from 'react-bootstrap/OverlayTrigger';
@@ -7,55 +7,82 @@ import Button from 'react-bootstrap/Button';
 import { IoIosOptions  } from "react-icons/io";
 
 
+const PANEL_WIDTH = 340;
+
 const Container = styled.div`
   position: absolute;
-  top: 0;
-  left: 0;
-  height: 100vh;
-  width: 20%;
-  background-color: #4f5b679e;
-  color: #fff;
-  
+  top: 24px;
+  left: 24px;
+  width: min(${PANEL_WIDTH}px, calc(100% - 48px));
+  height: calc(100% - 48px);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border-radius: 20px;
+  background: linear-gradient(160deg, rgba(15, 23, 42, 0.82), rgba(12, 20, 33, 0.68));
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  box-shadow: 0 24px 48px rgba(8, 47, 73, 0.32);
+  backdrop-filter: blur(18px);
+  color: #f8fafc;
   z-index: 1000;
-  transition: transform 0.3s ease;
-  /* When closed, shift left so that only 40px remains visible */
-  transform: ${({ isOpen }) => isOpen ? 'translateX(0)' : 'translateX(calc(-100% ))'};
-
-  /* On small screens, use 100% width */
-  @media (max-width: 768px) {
-    width: 100%;
-    transform: ${({ isOpen }) => isOpen ? 'translateX(0)' : 'translateX(calc(-100%))'};
-  }
+  pointer-events: ${({ isOpen }) => (isOpen ? 'auto' : 'none')};
+  transform: ${({ isOpen }) =>
+    isOpen ? 'translateX(0)' : 'translateX(calc(-110%))'};
+  transition: transform 260ms ease, box-shadow 260ms ease, border-color 260ms ease;
+  will-change: transform;
 `;
 
 const TogggledButton = styled(Button)`
-  top: 200px;
-  left: ${({ currentMenu }) => currentMenu ? '21%' : '20px'};
   position: absolute;
-  
-  margin-top: 10px;
-
-  transition: transform 0.3s ease;
-
-  background-color: #009989;
-  border: none;
-  color: white;
-  border-radius: 5px;
-  padding: 3px 10px;
+  top: 200px;
+  left: ${({ $shifted }) =>
+    $shifted
+      ? `calc(24px + min(${PANEL_WIDTH}px, calc(100% - 48px)) + 16px)`
+      : '24px'};
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  background: ${({ $active }) =>
+    $active ? 'rgba(37, 99, 235, 0.35)' : 'rgba(15, 23, 42, 0.65)'};
+  border: 1px solid
+    ${({ $active }) =>
+      $active ? 'rgba(147, 197, 253, 0.6)' : 'rgba(148, 163, 184, 0.3)'};
+  color: #e0f2fe;
+  padding: 0;
+  box-shadow: ${({ $active }) =>
+    $active ? '0 18px 34px rgba(8, 47, 73, 0.36)' : '0 14px 28px rgba(8, 47, 73, 0.3)'};
   z-index: 1001;
+  transition: background 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
 
-  &:hover, &:focus {
-    background-color: #000000b3 !important;
-    color: white;
-    border: none;
-    box-shadow: none;
+  &:hover,
+  &:focus {
+    background: rgba(37, 99, 235, 0.45) !important;
+    border-color: rgba(147, 197, 253, 0.7);
+    color: #f8fafc;
+    box-shadow: 0 18px 36px rgba(8, 47, 73, 0.4);
   }
 `;
 
 
 const Content = styled.div`
-  padding: 16px;
-  margin-top: 100px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 4px;
+
+  h5 {
+    margin: 0;
+    font-size: 1rem;
+    letter-spacing: 0.03em;
+    font-weight: 600;
+    color: inherit;
+  }
 `;
 
 
@@ -71,24 +98,23 @@ const HydroFabricSelectMenu = ({
   
   return (
     <Fragment>
-          {
-            !isopen && 
-            <OverlayTrigger
-              key={'right'}
-              placement={'right'}
-              overlay={
-                <Tooltip id={`tooltip-right`}>
-                  HydroFabric Menu
-                </Tooltip>
-              }
+          <OverlayTrigger
+            key={'right'}
+            placement={'right'}
+            overlay={
+              <Tooltip id={`tooltip-right`}>
+                HydroFabric Menu
+              </Tooltip>
+            }
+          >
+            <TogggledButton
+              onClick={handleIsOpen}
+              $active={isopen}
+              $shifted={Boolean(currentMenu)}
             >
-            <TogggledButton onClick={handleIsOpen} currentMenu={currentMenu}>
                <IoIosOptions size={15} />
             </TogggledButton>
-            </OverlayTrigger>            
-            
-
-          }
+          </OverlayTrigger>
           <Container isOpen={isopen}>
             <Content>
                 <HydroFabricSelect

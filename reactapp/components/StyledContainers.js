@@ -2,34 +2,63 @@
 import styled from 'styled-components';
 import useTheme from 'hooks/useTheme';
 
+const LEFT_PANEL_WIDTH = 340;
+const HORIZONTAL_MARGIN = 24;
+const PANEL_GAP = 24;
+
 // HydroFabricContainer
 const StyledHydroFabricContainer = styled.div`
-  // flex: ${(props) => (props.$fullScreen ? '1 1 0%' : '1 1 40%')};
-  height: ${(props) => (props.$fullScreen ? '0%' : '40%;')};
-  // order: 2;
-  width: ${(props) => (props.isModelRunListOpen ? '80%' : '100%')};
-  margin-left: ${(props) => (props.isModelRunListOpen ? '20%' : '0%')};
-  padding: ${(props) => (props.$fullScreen ? '0px' : '5px;')}; 
-  background-color: ${(props) => props.theme === 'dark' ? '#4f5b67' : '#ffffff'};
-  position: absolute;
-  bottom: 0;
-  right: 0;
-  left: 0;
-  z-index: 1001;
-  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-  
-  /* For even smoother animation, include width in the transition */
-  @media (min-width: 768px) {
-    transition: margin-left 0.5s cubic-bezier(0.4, 0, 0.2, 1), 
-                width 0.5s cubic-bezier(0.4, 0, 0.2, 1),
-                transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  position: fixed;
+  bottom: 32px;
+  left: ${(props) =>
+    props.$menuOpen
+      ? `calc(${HORIZONTAL_MARGIN}px + min(${LEFT_PANEL_WIDTH}px, 100% - ${HORIZONTAL_MARGIN * 2}px) + ${PANEL_GAP}px)`
+      : `${HORIZONTAL_MARGIN}px`};
+  right: ${HORIZONTAL_MARGIN}px;
+  width: auto;
+  max-width: ${(props) =>
+    props.$menuOpen
+      ? `calc(100% - (${HORIZONTAL_MARGIN}px + min(${LEFT_PANEL_WIDTH}px, 100% - ${HORIZONTAL_MARGIN * 2}px) + ${PANEL_GAP}px) - ${HORIZONTAL_MARGIN}px)`
+      : `calc(100% - ${HORIZONTAL_MARGIN * 2}px)`};
+  min-width: min(320px, calc(100% - ${HORIZONTAL_MARGIN * 2}px));
+  padding: 24px 28px;
+  border-radius: 24px;
+  background: ${(props) =>
+    props.theme === 'dark'
+      ? 'linear-gradient(160deg, rgba(15, 23, 42, 0.9), rgba(12, 20, 33, 0.72))'
+      : 'linear-gradient(160deg, rgba(226, 232, 240, 0.95), rgba(226, 232, 240, 0.78))'};
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  box-shadow: 0 24px 48px rgba(8, 47, 73, 0.28);
+  backdrop-filter: blur(18px);
+  color: ${(props) => (props.theme === 'dark' ? '#f8fafc' : '#0f172a')};
+  z-index: 1100;
+  pointer-events: ${(props) => (props.$fullScreen ? 'none' : 'auto')};
+  opacity: ${(props) => (props.$fullScreen ? 0 : 1)};
+  transform: ${(props) => (props.$fullScreen ? 'translateY(24px)' : 'translateY(0)')};
+  transition: opacity 220ms ease, transform 220ms ease, left 220ms ease, max-width 220ms ease;
+  height: ${(props) => (props.$fullScreen ? '0' : '40vh')};
+  max-height: 400px;
+  overflow-y: auto;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.35);
+    border-radius: 999px;
   }
 `;
 
-export const HydroFabricContainer = (props) => {
+export const HydroFabricContainer = ({ isModelRunListOpen, ...rest }) => {
   const theme = useTheme();
-  return <StyledHydroFabricContainer {...props} theme={theme} />;
+  return (
+    <StyledHydroFabricContainer
+      {...rest}
+      theme={theme}
+      $menuOpen={isModelRunListOpen}
+    />
+  );
 };
 
 // HydroFabricPlotContainer
@@ -73,6 +102,8 @@ const StyledMapContainer = styled.div`
   height: ${(props) => (props.$fullScreen ? '100%' : '60%')};
   background-color: ${(props) =>
     props.theme === 'dark' ? '#1f1f1f' : '#f9f9f9'};
+  position: relative;
+  overflow: hidden;
 `;
 
 export const MapContainer = (props) => {

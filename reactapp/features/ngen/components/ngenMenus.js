@@ -1,121 +1,62 @@
-import React, { Fragment, useState } from 'react';
-import styled from 'styled-components';
-import Button from 'react-bootstrap/Button';
+import React, { Fragment, useEffect, useState } from 'react';
 
 import HydrofabricLayerMenu from 'features/ngen/components/hydroFabricLayerMenu';
 import HydroFabricSelectMenu from 'features/ngen/components/hydroFabricSelectMenu';
 import HydroFabricTimeSeriesMenu from 'features/ngen/components/hydroFabricTimeSeriesMenu';
-
-import { IoMdClose } from "react-icons/io";
-
-
-const TogggledButton = styled(Button)`
-  top: 60px;
-  left: 1%;
-  position: absolute;
-  margin-top: 10px;
-
-  // transform: translate(-50%, -50%);
-  transition: transform 0.3s ease;
-
-  background-color: rgba(255, 255, 255, 0.1);
-  border: none;
-  color: white;
-  border-radius: 5px;
-  padding: 7px 8px;
-  z-index: 1001;
-
-  &:hover, &:focus {
-    background-color: rgba(0, 0, 0, 0.1)!important;
-    color: white;
-    border: none;
-    box-shadow: none;
-  }
-`;
-
-
+const MENUS = {
+  MODEL_RUNS: 'modelRuns',
+  HYDRO_LAYER: 'hydroLayer',
+  HYDRO_SELECT: 'hydroSelect',
+};
 
 const NgenMenuWrapper = ({
   toggleSingleRow,
   setIsLoading,
   setIsNgenMenuOpen,
   singleRowOn,
-  MenuComponent
+  MenuComponent,
 }) => {
-  const [isWrapperMenuOpen, setIsWrapperMenuOpen] = useState(false);
-  const [isHydroFabricSelectOpen, setIsHydroFabricSelectOpen] = useState(false);
-  const [isHydroFabricLayerOpen, setIsHydroFabricLayerOpen] = useState(false);
-  const [currentMenu, setCurrentMenu] = useState(null);
-  
-  const handleWrapperMenu = () => {
-    setIsWrapperMenuOpen(prev => !prev);
-    setIsHydroFabricSelectOpen(false);
-    setIsHydroFabricLayerOpen(false);
-    setCurrentMenu(true);
-    setIsNgenMenuOpen(true);
+  const [activeMenu, setActiveMenu] = useState(null);
+
+  useEffect(() => {
+    setIsNgenMenuOpen?.(Boolean(activeMenu));
+  }, [activeMenu, setIsNgenMenuOpen]);
+
+  const toggleMenu = (menuKey) => {
+    setActiveMenu((previous) => (previous === menuKey ? null : menuKey));
   };
 
-  const handleHydroLayerMenu = () => {
-    setIsWrapperMenuOpen(false);
-    setIsHydroFabricSelectOpen(false);
-    setIsHydroFabricLayerOpen(prev => !prev);
-    setCurrentMenu(true);
-    setIsNgenMenuOpen(true);
-  };
-
-  const handleHydroSelectMenu = () => {
-    setIsWrapperMenuOpen(false);
-    setIsHydroFabricSelectOpen(prev => !prev);
-    setIsHydroFabricLayerOpen(false);
-    setCurrentMenu(true);
-    setIsNgenMenuOpen(true);
-
-  };
-
-  const handleClose = () => {
-    setIsWrapperMenuOpen(false);
-    setIsHydroFabricSelectOpen(false);
-    setIsHydroFabricLayerOpen(false);
-    setCurrentMenu(null);
-    setIsNgenMenuOpen(false);
-
-  }
+  const isWrapperMenuOpen = activeMenu === MENUS.MODEL_RUNS;
+  const isHydroFabricLayerOpen = activeMenu === MENUS.HYDRO_LAYER;
+  const isHydroFabricSelectOpen = activeMenu === MENUS.HYDRO_SELECT;
 
   return (
     <Fragment>
-        {
-          currentMenu &&
-          <TogggledButton onClick={handleClose}>
-            <IoMdClose size={20} />
-          </TogggledButton>
-        }
+      <MenuComponent
+        isopen={isWrapperMenuOpen}
+        handleIsOpen={() => toggleMenu(MENUS.MODEL_RUNS)}
+        currentMenu={activeMenu}
+      />
 
-        <MenuComponent  
-          isopen={isWrapperMenuOpen}
-          handleIsOpen={handleWrapperMenu}
-          currentMenu={currentMenu}
-        />
+      <HydrofabricLayerMenu
+        isopen={isHydroFabricLayerOpen}
+        handleIsOpen={() => toggleMenu(MENUS.HYDRO_LAYER)}
+        currentMenu={activeMenu}
+      />
 
-        <HydrofabricLayerMenu
-          isopen={isHydroFabricLayerOpen}
-          handleIsOpen={handleHydroLayerMenu}
-          currentMenu={currentMenu}
-        />
-          
-        <HydroFabricSelectMenu
-          isopen={isHydroFabricSelectOpen}
-          handleIsOpen={handleHydroSelectMenu}
-          toggleSingleRow={toggleSingleRow}
-          setIsLoading={setIsLoading}
-          currentMenu={currentMenu}
-        />
+      <HydroFabricSelectMenu
+        isopen={isHydroFabricSelectOpen}
+        handleIsOpen={() => toggleMenu(MENUS.HYDRO_SELECT)}
+        toggleSingleRow={toggleSingleRow}
+        setIsLoading={setIsLoading}
+        currentMenu={activeMenu}
+      />
 
-        <HydroFabricTimeSeriesMenu
-          toggleSingleRow={toggleSingleRow}
-          currentMenu={currentMenu}
-          singleRowOn={singleRowOn}
-        />
-
+      <HydroFabricTimeSeriesMenu
+        toggleSingleRow={toggleSingleRow}
+        currentMenu={activeMenu}
+        singleRowOn={singleRowOn}
+      />
     </Fragment>
 
   );
