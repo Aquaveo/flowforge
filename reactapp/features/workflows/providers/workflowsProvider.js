@@ -77,6 +77,7 @@ export function WorkflowsProvider({ children }) {
   const templateChains = {
     'pre->cfg'                     : ['pre-process','calibration-config'],
     'pre->cfg->cal'                : ['pre-process','calibration-config','calibration-run'],
+    'pre->cfg->cal->run'           : ['pre-process','calibration-config','calibration-run','ngiab-run'],
     'pre->run'                     : ['pre-process','ngiab-run'],
     'pre->run->teehr'              : ['pre-process','ngiab-run','ngiab-teehr'],
     'pre->cfg->cal->run->teehr'    : ['pre-process','calibration-config','calibration-run','ngiab-run','ngiab-teehr'],

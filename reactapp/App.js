@@ -5,7 +5,7 @@ import Layout from 'components/layout/Layout';
 import Loader from 'components/loader/Loader';
 import 'App.scss';
 
-import WorkflowsView from 'features/workflows/views/workflowsView';
+import FlowForgeExperience from 'features/flowforge/views/FlowForgeExperience';
 
 function App() {
   const PATH_HOME = '/';
@@ -22,7 +22,7 @@ function App() {
                 {title: '📖 Visualizer Documentation', to: PATH_VISUALIZATION_DOCUMENTATION,  external: true},
               ]}
               routes={[
-                <Route path={PATH_HOME} element={<WorkflowsView />} key='route-home' />
+                <Route path={PATH_HOME} element={<FlowForgeExperience />} key='route-home' />
               ]}
             />
           </Loader>
