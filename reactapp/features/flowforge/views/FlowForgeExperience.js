@@ -7,17 +7,22 @@ import NGIABView from '../../../views/ngiab_view';
 
 const TABS = [
   { key: 'workflows', label: 'Workflows', icon: FaProjectDiagram },
-  { key: 'map', label: 'Map & Metrics', icon: FaChartArea },
+  { key: 'map', label: 'Visualization', icon: FaChartArea },
 ];
 
 const Container = styled.div`
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
-  gap: 16px;
+  padding: 20px;
+  // gap: 16px;
 `;
 
 const TabStrip = styled.nav`
+  position: absolute;
+  top: 24px;
+  right: 24px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -27,6 +32,7 @@ const TabStrip = styled.nav`
   border-radius: 14px;
   box-shadow: 0 12px 24px rgba(8, 47, 73, 0.25);
   width: fit-content;
+  z-index: 5;
 `;
 
 const TabButton = styled.button`
@@ -51,7 +57,7 @@ const TabButton = styled.button`
   }
 
   svg {
-    font-size: 1rem;
+    font-size: 0.9rem;
   }
 `;
 

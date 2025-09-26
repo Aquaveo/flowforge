@@ -96,10 +96,11 @@ export const SelectContainer = (props) => {
 
 // MapContainer
 const StyledMapContainer = styled.div`
-  flex: ${(props) => (props.$fullScreen ? '1 1 100%' : '1 1 60%')};
+  flex: 1 1 100%;
   order: 1;
   width: 100%;
-  height: ${(props) => (props.$fullScreen ? '100%' : '60%')};
+  height: 100%;
+  min-height: 0;
   background-color: ${(props) =>
     props.theme === 'dark' ? '#1f1f1f' : '#f9f9f9'};
   position: relative;

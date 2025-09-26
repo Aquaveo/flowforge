@@ -36,6 +36,7 @@ const Sidebar = styled.aside`
   display: flex;
   flex-direction: column;
   gap: 14px;
+  height: 100%;
   width: 360px;
   padding: 18px;
   border-radius: 20px;
@@ -497,7 +498,7 @@ function Toolbar({ sidebarVisible }) {
         />
       </SectionCard>
 
-      <SectionCard>
+      {/* <SectionCard>
         <SectionHeader>
           <SectionHeading>
             <SectionTitle>Templates</SectionTitle>
@@ -515,7 +516,7 @@ function Toolbar({ sidebarVisible }) {
         <TemplateCollapse $open={templatesOpen} id="workflow-template-gallery">
           <TemplateGallery templates={TEMPLATE_OPTIONS} onChoose={applyTemplate} />
         </TemplateCollapse>
-      </SectionCard>
+      </SectionCard> */}
 
       <SectionCard>
         <SectionHeader>
