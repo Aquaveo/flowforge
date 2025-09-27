@@ -1,7 +1,7 @@
 
 
 
-import React, { useEffect, useState, Fragment } from 'react';
+import React, { useEffect, Fragment, useContext, useRef } from 'react';
 import styled from 'styled-components';
 import Button from 'react-bootstrap/Button';
 import { FaList } from "react-icons/fa";
@@ -10,9 +10,11 @@ import Tooltip from 'react-bootstrap/Tooltip';
 
 import { useModelRunsContext } from 'features/ModelRuns/hooks/useModelRunsContext';
 import { useHydroFabricContext } from 'features/hydroFabric/hooks/useHydroFabricContext';
-import appAPI from 'services/api/app';
+// import appAPI from 'services/api/app';
+import { AppContext } from 'context/context';
 import SelectComponent from 'components/selectComponent';
 import ImportModel from 'features/ModelRuns/components/importModel';
+
 
 const PANEL_WIDTH = 340;
 
@@ -35,7 +37,7 @@ const Container = styled.div`
   z-index: 1000;
   pointer-events: ${({ isOpen }) => (isOpen ? 'auto' : 'none')};
   transform: ${({ isOpen }) =>
-    isOpen ? 'translateX(0)' : 'translateX(calc(-110%))'};
+    isOpen ? 'translateX(0)' : 'translateX(calc(-120%))'};
   transition: transform 260ms ease, box-shadow 260ms ease, border-color 260ms ease;
   will-change: transform;
 `;
@@ -103,31 +105,18 @@ const Content = styled.div`
   }
 `;
 
-
-
 const ModelRunsSelect = ({
   isopen,
   handleIsOpen,
   currentMenu
 }) => {
-
+  const { backend } = useContext(AppContext);
   const {state,actions} = useModelRunsContext();
   const {actions: hydroFabricActions} = useHydroFabricContext();
+  const hasRequestedRef = useRef(false);
 
-  useEffect(() => {
-    appAPI.getModelRuns().then((response) => {
-      
-      actions.set_model_run_list(response.model_runs);
-    }).catch((error) => {
-      console.log("Error fetching Model Runs", error);
-      hydroFabricActions.reset();
-    })
-    return  () => {
-      if(state.model_runs.length < 0) return
-      actions.reset();
-    }
 
-  }, []);
+
   
   useEffect(() => {
     hydroFabricActions.reset();
@@ -137,7 +126,51 @@ const ModelRunsSelect = ({
     actions.set_base_model_id(state.current_model_runs[0].value)
     
   }
-  , [state.current_model_runs]);
+  , [state.current_model_runs, actions, hydroFabricActions]);
+
+
+
+  useEffect(() => {
+    if (!isopen) {
+      hasRequestedRef.current = false;
+      return undefined;
+    }
+
+    if (!backend) {
+      console.warn('[ModelRunsSelect] backend unavailable; cannot request model runs');
+      return undefined;
+    }
+
+    if (hasRequestedRef.current) {
+      console.log('[ModelRunsSelect] model run request already made for this open session');
+      return undefined;
+    }
+
+    const sendRequest = () => {
+      try {
+        console.log('[ModelRunsSelect] requesting workflows visualizations via websocket');
+        backend.do(backend.actions.LIST_WORKFLOWS_VISUALIZATIONS, {});
+        hasRequestedRef.current = true;
+      } catch (err) {
+        console.error('[ModelRunsSelect] failed to request model runs', err);
+      }
+    };
+
+    if (backend.webSocket?.readyState === WebSocket.OPEN) {
+      sendRequest();
+      return undefined;
+    }
+
+    console.log('[ModelRunsSelect] websocket not open; waiting before requesting model runs');
+    const interval = setInterval(() => {
+      if (backend.webSocket?.readyState === WebSocket.OPEN) {
+        sendRequest();
+        clearInterval(interval);
+      }
+    }, 600);
+
+    return () => clearInterval(interval);
+  }, [isopen, backend]);
 
   return (
     <Fragment>

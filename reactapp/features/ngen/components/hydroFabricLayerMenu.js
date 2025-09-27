@@ -27,7 +27,7 @@ const Container = styled.div`
   z-index: 1000;
   pointer-events: ${({ isOpen }) => (isOpen ? 'auto' : 'none')};
   transform: ${({ isOpen }) =>
-    isOpen ? 'translateX(0)' : 'translateX(calc(-110%))'};
+    isOpen ? 'translateX(0)' : 'translateX(calc(-120%))'};
   transition: transform 260ms ease, box-shadow 260ms ease, border-color 260ms ease;
   will-change: transform;
 `;

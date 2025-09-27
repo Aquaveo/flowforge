@@ -3,6 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any, Dict
+from sqlalchemy import select, desc
+from sqlalchemy.sql import nulls_last
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 
 from tethysapp.flowforge.some_utils import (
@@ -16,16 +20,103 @@ from tethysapp.flowforge.utils import (
     get_model_runs_selectable
 )
 
+from ...model import Workflow as WFModel, Node as NodeModel
+from ...model.virtual_output import VirtualOutput as VOModel
+from .model_run_handler import ModelBackendHandler as MBH
+from ..backend_actions import BackendActions
 
 log = logging.getLogger(__name__)
 
-class HomeImportHandler:
+
+class HomeImportHandler(MBH):
     def __init__(self, consumer):
+        super().__init__(consumer)
         self.consumer = consumer
         self.receiving_actions = {
             "IMPORT_FROM_S3": self.import_from_s3,
             "IMPORT_CHECK": self.import_check,
+            "LIST_WORKFLOWS_VISUALIZATIONS": self.receive_list_workflows_visualizations,
         }
+
+    @staticmethod
+    def _serialize_virtual_output(vo: VOModel) -> Dict[str, Any]:
+        return {
+            "id": str(vo.id),
+            "name": vo.name,
+            "storage_scheme": vo.storage_scheme,
+            "bucket": vo.bucket,
+            "object_key": vo.object_key,
+            "uri": vo.uri,
+            "extra": vo.extra,
+            "created_at": vo.created_at.isoformat() if vo.created_at else None,
+            "updated_at": vo.updated_at.isoformat() if vo.updated_at else None,
+        }
+    
+    @staticmethod
+    def _serialize_node(node: NodeModel) -> Dict[str, Any]:
+        return {
+            "id": str(node.id),
+            "name": node.name,
+            "kind": node.kind,
+            "status": node.status,
+            "message": node.message,
+            "order_index": node.order_index,
+            "pos_x": node.pos_x,
+            "pos_y": node.pos_y,
+            "config": node.config,
+            "created_at": node.created_at.isoformat() if node.created_at else None,
+            "updated_at": node.updated_at.isoformat() if node.updated_at else None,
+            "virtual_outputs": [HomeImportHandler._serialize_virtual_output(vo) for vo in node.virtual_outputs],
+        }
+
+
+    @MBH.action_handler
+    async def receive_list_workflows_visualizations(self, event, action, data, session: AsyncSession):
+        """Return workflows and associated model run data for visualization menus."""
+        try:
+            user = self.backend_consumer.scope.get("user")
+            username = getattr(user, "username", None)
+            log.info("[HomeImportHandler] Listing workflow visualizations for user=%s", username or "anonymous")
+            
+            q = (
+                select(WFModel)
+                .options(
+                    selectinload(WFModel.nodes).selectinload(NodeModel.virtual_outputs)
+                )
+                .order_by(
+                    nulls_last(desc(WFModel.last_run_at)),
+                    desc(WFModel.created_at),
+                )
+                .limit(1000)
+            )            
+            if username:
+                q = q.where(WFModel.user == username)
+            rows = (await session.execute(q)).scalars().all()
+
+            # model_run_select = await asyncio.to_thread(get_model_runs_selectable)
+
+            items = [{
+                "id": w.id,
+                "name": w.name,
+                "status": w.status,
+                "created_at": w.created_at.isoformat() if w.created_at else None,
+                "updated_at": w.updated_at.isoformat() if w.updated_at else None,
+                "last_run_at": w.last_run_at.isoformat() if w.last_run_at else None,
+                "nodes": [self._serialize_node(node) for node in w.nodes],
+            } for w in rows]
+
+            payload = {
+                "items": items,
+                "count": len(items),
+                # "model_runs": model_run_select,
+            }
+            log.debug("[HomeImportHandler] Sending visualization payload with %s workflows and %s model runs", len(items))
+            await self.send_action(BackendActions.WORKFLOWS_VISUALIZATION_LIST, payload)
+        except Exception as e:
+            log.exception("Failed to list workflows for visualization")
+            await self.send_error(f"Failed to list workflows: {e}", action, data)
+
+
 
     async def import_check(self, event: Dict[str, Any], action: Dict[str, Any], data: Dict[str, Any]):
         # NEW: prefer s3_uri; fall back to legacy bucket/key if provided

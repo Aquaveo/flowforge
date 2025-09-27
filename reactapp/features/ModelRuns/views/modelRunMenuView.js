@@ -3,6 +3,8 @@ import NgenMenuWrapper from 'features/ngen/components/ngenMenus';
 import ModelRunsSelect from '../components/modelRunsSelect';
 import { AppContext } from "context/context";
 import { useModelRunsContext } from 'features/ModelRuns/hooks/useModelRunsContext';
+import { useHydroFabricContext } from 'features/hydroFabric/hooks/useHydroFabricContext';
+
 import { toast } from 'react-toastify';
 
 const ModelRunMenuView = ({
@@ -13,6 +15,7 @@ const ModelRunMenuView = ({
 }) => {
   const { backend } = useContext(AppContext);
   const { actions: modelRunActions } = useModelRunsContext();
+  const {actions: hydroFabricActions} = useHydroFabricContext();
 
   useEffect(() => {
     if (!backend) return;
@@ -20,8 +23,22 @@ const ModelRunMenuView = ({
     backend.on('MESSAGE_ACKNOWLEDGE', ({ message }) => {
       toast.info(message ?? 'Acknowledged.', { position: 'top-right', autoClose: 2000 });
     });
+    
+    backend.on('WORKFLOWS_VISUALIZATION_LIST', (payload) => {
+      console.log('[ModelRunMenuView] received workflows visualization payload', payload);
+      const { model_runs: modelRuns = [], items: workflows = [] } = payload || {};
+      try {
+        modelRunActions.set_model_run_list(modelRuns);
+      } catch (err) {
+        console.error('[ModelRunMenuView] error updating model run list', err);
+        hydroFabricActions.reset();
+      }
+      // Optional: expose workflows if needed later
+      if (!Array.isArray(workflows)) {
+        console.warn('[ModelRunMenuView] workflows payload was not an array', workflows);
+      }
+    });
 
-    // 2) progress while importing
     backend.on('IMPORT_PROGRESS', ({ stage, s3_uri }) => {
       setIsLoading?.(true);
       toast.dismiss('import-progress');
@@ -31,7 +48,6 @@ const ModelRunMenuView = ({
       );
     });
 
-    // 3) done → fetch geospatial + notify
     backend.on('IMPORT_DONE', async ({ id, mode_run_select }) => {
       try {
         modelRunActions.set_model_run_list(mode_run_select);
@@ -48,11 +64,14 @@ const ModelRunMenuView = ({
 
     return () => {
       backend.off('MESSAGE_ACKNOWLEDGE');
+      backend.off('WORKFLOWS_VISUALIZATION_LIST');
       backend.off('IMPORT_PROGRESS');
       backend.off('IMPORT_DONE');
       toast.dismiss('import-progress');
+      modelRunActions.reset();
+      hydroFabricActions.reset();
     };
-  }, [backend, setIsLoading, setIsMenuOpen]);
+  }, [backend, setIsLoading, hydroFabricActions, modelRunActions]);
   
   return (
     <Fragment>
