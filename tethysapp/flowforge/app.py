@@ -25,7 +25,7 @@ class App(TethysAppBase):
             PersistentStoreDatabaseSetting(
                 name="workflows",
                 description="Stores workflow and node state",
-                initializer="ngiab.model.init_db.create_tables",
+                initializer="flowforge.model.init_db.create_tables",
                 spatial=False,   # set True if you need PostGIS
                 required=True,
             ),

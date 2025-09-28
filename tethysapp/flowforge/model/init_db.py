@@ -1,5 +1,10 @@
+import logging
+
 from sqlalchemy.orm import sessionmaker
+
 from . import Base
+
+log = logging.getLogger(__name__)
 
 def create_tables(engine, first_time: bool = False):
     """
@@ -8,6 +13,7 @@ def create_tables(engine, first_time: bool = False):
     (e.g., via Alembic or a startup hook).
     """
     print("Initializing Persistent Storage")
+    log.info("Tables registered on metadata: %s", list(Base.metadata.tables.keys()))
     Base.metadata.create_all(engine)  # single call for all tables
     if first_time:
         SessionMaker = sessionmaker(bind=engine)
