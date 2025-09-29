@@ -19,13 +19,70 @@ spec:
         - { name: output_name,    default: "ngiab" }
         - { name: source,         default: "nwm" }
         - { name: debug,          default: "false" }
-        - { name: all,        default: "false" }
-        - { name: subset,     default: "true" }
-        - { name: forcings,   default: "true" }
-        - { name: realization,default: "true" }
-        - { name: run,        default: "false" }
-        - { name: validate,   default: "false" }
+        - { name: all,            default: "false" }
+        - { name: subset,         default: "true" }
+        - { name: forcings,       default: "true" }
+        - { name: realization,    default: "true" }
+        - { name: run,            default: "false" }
+        - { name: validate,       default: "false" }
+    steps:
+      - - name: preprocess
+          template: preprocess-run
+          arguments:
+            parameters:
+              - { name: output_name,    value: "{{inputs.parameters.output_name}}" }
+              - { name: selector_type,  value: "{{inputs.parameters.selector_type}}" }
+              - { name: selector_value, value: "{{inputs.parameters.selector_value}}" }
+              - { name: vpu,            value: "{{inputs.parameters.vpu}}" }
+              - { name: start_date,     value: "{{inputs.parameters.start_date}}" }
+              - { name: end_date,       value: "{{inputs.parameters.end_date}}" }
+              - { name: source,         value: "{{inputs.parameters.source}}" }
+              - { name: debug,          value: "{{inputs.parameters.debug}}" }
+              - { name: all,            value: "{{inputs.parameters.all}}" }
+              - { name: subset,         value: "{{inputs.parameters.subset}}" }
+              - { name: forcings,       value: "{{inputs.parameters.forcings}}" }
+              - { name: realization,    value: "{{inputs.parameters.realization}}" }
+              - { name: run,            value: "{{inputs.parameters.run}}" }
+              - { name: validate,       value: "{{inputs.parameters.validate}}" }
+      - - name: tiles
+          template: build-tiles
+          arguments:
+            parameters:
+              - { name: output_bucket, value: "{{inputs.parameters.output_bucket}}" }
+              - { name: output_prefix, value: "{{inputs.parameters.output_prefix}}" }
+              - { name: output_name,   value: "{{inputs.parameters.output_name}}" }
+            artifacts:
+              - name: preprocess_dir
+                from: "{{steps.preprocess.outputs.artifacts.preprocess_dir}}"
+    outputs:
+      parameters:
+        - name: preprocess_bucket
+          valueFrom: { parameter: "{{steps.tiles.outputs.parameters.preprocess_bucket}}" }
+        - name: preprocess_s3_key
+          valueFrom: { parameter: "{{steps.tiles.outputs.parameters.preprocess_s3_key}}" }
+        - name: preprocess_s3_url
+          valueFrom: { parameter: "{{steps.tiles.outputs.parameters.preprocess_s3_url}}" }
+      artifacts:
+        - name: preprocess
+          from: "{{steps.tiles.outputs.artifacts.preprocess}}"
 
+  - name: preprocess-run
+    inputs:
+      parameters:
+        - { name: output_name,    default: "ngiab" }
+        - { name: selector_type,  default: "gage" }
+        - { name: selector_value, default: "01359139" }
+        - { name: vpu,            default: "" }
+        - { name: start_date,     default: "2020-01-01" }
+        - { name: end_date,       default: "2020-01-15" }
+        - { name: source,         default: "nwm" }
+        - { name: debug,          default: "false" }
+        - { name: all,            default: "false" }
+        - { name: subset,         default: "true" }
+        - { name: forcings,       default: "true" }
+        - { name: realization,    default: "true" }
+        - { name: run,            default: "false" }
+        - { name: validate,       default: "false" }
     script:
       image: ghcr.io/astral-sh/uv:python3.11-bookworm-slim
       command: [bash, -lc]
@@ -98,15 +155,163 @@ spec:
           [ -n "${NEWEST:-}" ] && cp -a "${NEWEST}/." "${TARGET}/" || true
         fi
 
-        mkdir -p /tmp/out
-        printf "%s\n" "{{inputs.parameters.output_bucket}}" > /tmp/out/.s3_bucket
-        printf "%s\n" "{{inputs.parameters.output_prefix}}/{{inputs.parameters.output_name}}.tgz" > /tmp/out/.s3_key
-        printf "s3://%s/%s\n" "{{inputs.parameters.output_bucket}}" "{{inputs.parameters.output_prefix}}/{{inputs.parameters.output_name}}.tgz" > /tmp/out/.s3_url
+        mkdir -p "$TARGET/config" "$TARGET/forcings" "$TARGET/metadata" "$TARGET/outputs"
 
         echo "Final staged directory: ${TARGET}"
         ls -lah "$TARGET" || true
+    outputs:
+      artifacts:
+        - name: preprocess_dir
+          path: /root/ngiab_preprocess_output/{{inputs.parameters.output_name}}
+          archive:
+            none: {}
 
-    outputs:   # <— SIBLING of 'script', not nested inside it
+  - name: build-tiles
+    inputs:
+      parameters:
+        - { name: output_bucket, default: "test-ngen" }
+        - { name: output_prefix, default: "demo/default" }
+        - { name: output_name,   default: "ngiab" }
+      artifacts:
+        - name: preprocess_dir
+          path: /data/preprocess
+    script:
+      image: quay.io/kartoza/tippecanoe:latest
+      command: [bash, -lc]
+      env:
+        - name: AWS_DEFAULT_REGION
+          value: us-east-1
+      source: |
+        set -euo pipefail
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -y && apt-get install -y --no-install-recommends \
+          curl ca-certificates gdal-bin coreutils findutils tar unzip && \
+          rm -rf /var/lib/apt/lists/*
+
+        if ! command -v tippecanoe >/dev/null 2>&1; then
+          echo "tippecanoe binary not found" >&2
+          exit 2
+        fi
+
+        if ! command -v pmtiles >/dev/null 2>&1; then
+          echo "Installing pmtiles CLI"
+          curl -sSL "https://github.com/protomaps/PMTiles/releases/latest/download/pmtiles-linux-x64" -o /usr/local/bin/pmtiles
+          chmod +x /usr/local/bin/pmtiles
+        fi
+
+        PREPROCESS_DIR="/data/preprocess"
+        CONFIG_DIR="${PREPROCESS_DIR}/config"
+        mkdir -p "${CONFIG_DIR}"
+
+        gpkg_to_mbtiles() {
+          local GPKG="$1"
+          local OUT_MB="$2"
+          command -v ogrinfo >/dev/null || { echo "ogrinfo not found"; return 2; }
+          command -v ogr2ogr  >/dev/null || { echo "ogr2ogr not found"; return 2; }
+          command -v tippecanoe >/dev/null || { echo "tippecanoe not found"; return 2; }
+          command -v tile-join  >/dev/null || { echo "tile-join not found"; return 2; }
+
+          local LAYERS=(flowpaths divides lakes hydrolocations nexus)
+          local WORK
+          WORK="$(mktemp -d "${TMPDIR:-/tmp}/gpkg2mbtiles.XXXXXX")"
+          trap 'rm -rf "${WORK}"' RETURN
+
+          echo ">> Working dir: ${WORK}"
+
+          fc() {
+            local layer="$1"
+            ogrinfo -so "${GPKG}" "${layer}" 2>/dev/null | awk -F': ' '/Feature Count/ {print $2+0}' || echo 0
+          }
+
+          local EXPORTED=()
+          local L
+          for L in "${LAYERS[@]}"; do
+            local COUNT
+            COUNT="$(fc "${L}")"
+            if [[ "${COUNT}" -eq 0 ]]; then
+              echo ">> Skipping '${L}' (0 features)"
+              continue
+            fi
+            echo ">> Exporting '${L}' (${COUNT} features) …"
+            ogr2ogr -f GeoJSONSeq -t_srs EPSG:4326 -lco RS=NO \
+              -dialect SQLite -sql "SELECT * FROM \"${L}\" WHERE ST_IsEmpty(geom)=0" \
+              "${WORK}/${L}.ndjson" "${GPKG}" "${L}" || {
+                echo "!! Export failed for '${L}', skipping"; continue;
+              }
+            if ! [[ -s "${WORK}/${L}.ndjson" ]]; then
+              echo ">> '${L}' produced no valid geometries after filtering, skipping"
+              continue
+            fi
+            EXPORTED+=("${L}")
+          done
+
+          if [[ "${#EXPORTED[@]}" -eq 0 ]]; then
+            echo "No non-empty layers to build for ${GPKG}."
+            return 0
+          fi
+
+          local MB_DIR="${WORK}/mb"
+          mkdir -p "${MB_DIR}"
+
+          build_layer () {
+            local LAYER="$1"
+            local INPUT="${WORK}/${LAYER}.ndjson"
+            local OUT_FILE="${MB_DIR}/${LAYER}.mbtiles"
+            [[ ! -s "${INPUT}" ]] && { echo ">> '${LAYER}' has no data, skip build"; return; }
+            echo ">> Building ${LAYER} …"
+            if [[ "${LAYER}" == "nexus" ]]; then
+              tippecanoe -zg -o "${OUT_FILE}" -l "${LAYER}" -r1 --cluster-distance=10 ${ACC_ATTR:+--accumulate-attribute="${ACC_ATTR}"} "${INPUT}"
+            else
+              tippecanoe -zg -o "${OUT_FILE}" -l "${LAYER}" --drop-densest-as-needed "${INPUT}"
+            fi
+          }
+
+          local L
+          for L in "${EXPORTED[@]}"; do
+            build_layer "${L}"
+          done
+
+          local MB_LIST=()
+          for L in "${EXPORTED[@]}"; do
+            [[ -s "${MB_DIR}/${L}.mbtiles" ]] && MB_LIST+=("${MB_DIR}/${L}.mbtiles")
+          done
+
+          if [[ "${#MB_LIST[@]}" -eq 0 ]]; then
+            echo "No layer MBTiles were created for ${GPKG}."
+            return 0
+          fi
+
+          echo ">> Merging into ${OUT_MB} …"
+          tile-join -o "${OUT_MB}" "${MB_LIST[@]}"
+          echo "✅ Wrote ${OUT_MB}"
+          return 0
+        }
+
+        echo ">> Searching for GPKG files under ${CONFIG_DIR}"
+        find "${CONFIG_DIR}" -maxdepth 1 -type f -name '*.gpkg' -print0 | while IFS= read -r -d '' GPKG_FILE; do
+          BASENAME="$(basename "${GPKG_FILE}" .gpkg)"
+          MB_OUT="${CONFIG_DIR}/${BASENAME}.mbtiles"
+          echo ">> Converting ${GPKG_FILE}"
+          if gpkg_to_mbtiles "${GPKG_FILE}" "${MB_OUT}"; then
+            PM_OUT="${CONFIG_DIR}/${BASENAME}.pmtiles"
+            if command -v pmtiles >/dev/null 2>&1; then
+              echo ">> Converting ${MB_OUT} to ${PM_OUT}"
+              pmtiles convert "${MB_OUT}" "${PM_OUT}" || echo "!! Failed to convert ${MB_OUT} to PMTiles" >&2
+            fi
+          else
+            echo "!! Failed to create MBTiles for ${GPKG_FILE}" >&2
+          fi
+        done
+
+        mkdir -p /tmp/out
+        DEST_PREFIX="{{inputs.parameters.output_prefix}}"
+        TAR_PATH="/tmp/out/preprocess.tgz"
+        tar -C "${PREPROCESS_DIR}" -czf "${TAR_PATH}" .
+        printf "%s\n" "{{inputs.parameters.output_bucket}}" > /tmp/out/.s3_bucket
+        printf "%s\n" "${DEST_PREFIX}/{{inputs.parameters.output_name}}.tgz" > /tmp/out/.s3_key
+        printf "s3://%s/%s\n" "{{inputs.parameters.output_bucket}}" "${DEST_PREFIX}/{{inputs.parameters.output_name}}.tgz" > /tmp/out/.s3_url
+
+    outputs:
       parameters:
         - name: preprocess_bucket
           valueFrom: { path: /tmp/out/.s3_bucket }
@@ -116,7 +321,9 @@ spec:
           valueFrom: { path: /tmp/out/.s3_url }
       artifacts:
         - name: preprocess
-          path: /root/ngiab_preprocess_output/{{inputs.parameters.output_name}}  # directory
+          path: /tmp/out/preprocess.tgz
+          archive:
+            none: {}
           s3:
             endpoint: s3.amazonaws.com
             region: us-east-1
