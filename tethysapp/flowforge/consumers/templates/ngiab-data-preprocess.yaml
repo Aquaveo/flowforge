@@ -176,7 +176,7 @@ spec:
         - name: preprocess_dir
           path: /data/preprocess
     script:
-      image: quay.io/kartoza/tippecanoe:latest
+      image: ghcr.io/jtmiclat/tippecanoe-docker:latest
       command: [bash, -lc]
       env:
         - name: AWS_DEFAULT_REGION
