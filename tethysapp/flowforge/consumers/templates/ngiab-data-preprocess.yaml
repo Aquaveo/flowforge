@@ -9,7 +9,7 @@ spec:
   - name: main
     inputs:
       parameters:
-        - { name: output_bucket,  default: "test-ngen" }
+        - { name: output_bucket,  default: "ngiab" }
         - { name: output_prefix,  default: "demo/default" }
         - { name: selector_type,  default: "gage" }
         - { name: selector_value, default: "01359139" }
@@ -52,19 +52,29 @@ spec:
               - { name: output_prefix, value: "{{inputs.parameters.output_prefix}}" }
               - { name: output_name,   value: "{{inputs.parameters.output_name}}" }
             artifacts:
-              - name: preprocess_dir
+              - name: preprocess
                 from: "{{steps.preprocess.outputs.artifacts.preprocess_dir}}"
+      - - name: convert
+          template: convert-tiles
+          arguments:
+            parameters:
+              - { name: output_bucket, value: "{{inputs.parameters.output_bucket}}" }
+              - { name: output_prefix, value: "{{inputs.parameters.output_prefix}}" }
+              - { name: output_name,   value: "{{inputs.parameters.output_name}}" }
+            artifacts:
+              - name: preprocess
+                from: "{{steps.tiles.outputs.artifacts.preprocess}}"
     outputs:
       parameters:
         - name: preprocess_bucket
-          valueFrom: { parameter: "{{steps.tiles.outputs.parameters.preprocess_bucket}}" }
+          valueFrom: { parameter: "{{steps.convert.outputs.parameters.preprocess_bucket}}" }
         - name: preprocess_s3_key
-          valueFrom: { parameter: "{{steps.tiles.outputs.parameters.preprocess_s3_key}}" }
+          valueFrom: { parameter: "{{steps.convert.outputs.parameters.preprocess_s3_key}}" }
         - name: preprocess_s3_url
-          valueFrom: { parameter: "{{steps.tiles.outputs.parameters.preprocess_s3_url}}" }
+          valueFrom: { parameter: "{{steps.convert.outputs.parameters.preprocess_s3_url}}" }
       artifacts:
         - name: preprocess
-          from: "{{steps.tiles.outputs.artifacts.preprocess}}"
+          from: "{{steps.convert.outputs.artifacts.preprocess}}"
 
   - name: preprocess-run
     inputs:
@@ -173,7 +183,7 @@ spec:
         - { name: output_prefix, default: "demo/default" }
         - { name: output_name,   default: "ngiab" }
       artifacts:
-        - name: preprocess_dir
+        - name: preprocess
           path: /data/preprocess
     script:
       image: ghcr.io/jtmiclat/tippecanoe-docker:latest
@@ -185,18 +195,12 @@ spec:
         set -euo pipefail
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -y && apt-get install -y --no-install-recommends \
-          curl ca-certificates gdal-bin coreutils findutils tar unzip && \
+          curl ca-certificates gdal-bin coreutils findutils tar unzip python3-pip && \
           rm -rf /var/lib/apt/lists/*
 
         if ! command -v tippecanoe >/dev/null 2>&1; then
           echo "tippecanoe binary not found" >&2
           exit 2
-        fi
-
-        if ! command -v pmtiles >/dev/null 2>&1; then
-          echo "Installing pmtiles CLI"
-          curl -sSL "https://github.com/protomaps/PMTiles/releases/latest/download/pmtiles-linux-x64" -o /usr/local/bin/pmtiles
-          chmod +x /usr/local/bin/pmtiles
         fi
 
         PREPROCESS_DIR="/data/preprocess"
@@ -292,25 +296,77 @@ spec:
           BASENAME="$(basename "${GPKG_FILE}" .gpkg)"
           MB_OUT="${CONFIG_DIR}/${BASENAME}.mbtiles"
           echo ">> Converting ${GPKG_FILE}"
-          if gpkg_to_mbtiles "${GPKG_FILE}" "${MB_OUT}"; then
-            PM_OUT="${CONFIG_DIR}/${BASENAME}.pmtiles"
-            if command -v pmtiles >/dev/null 2>&1; then
-              echo ">> Converting ${MB_OUT} to ${PM_OUT}"
-              pmtiles convert "${MB_OUT}" "${PM_OUT}" || echo "!! Failed to convert ${MB_OUT} to PMTiles" >&2
-            fi
-          else
+          if ! gpkg_to_mbtiles "${GPKG_FILE}" "${MB_OUT}"; then
             echo "!! Failed to create MBTiles for ${GPKG_FILE}" >&2
           fi
         done
 
-        mkdir -p /tmp/out
-        DEST_PREFIX="{{inputs.parameters.output_prefix}}"
-        TAR_PATH="/tmp/out/preprocess.tgz"
-        tar -C "${PREPROCESS_DIR}" -czf "${TAR_PATH}" .
-        printf "%s\n" "{{inputs.parameters.output_bucket}}" > /tmp/out/.s3_bucket
-        printf "%s\n" "${DEST_PREFIX}/{{inputs.parameters.output_name}}.tgz" > /tmp/out/.s3_key
-        printf "s3://%s/%s\n" "{{inputs.parameters.output_bucket}}" "${DEST_PREFIX}/{{inputs.parameters.output_name}}.tgz" > /tmp/out/.s3_url
+    outputs:
+      artifacts:
+        - name: preprocess
+          path: /data/preprocess
+          archive:
+            none: {}
 
+  - name: convert-tiles
+    inputs:
+      parameters:
+        - { name: output_bucket, default: "test-ngen" }
+        - { name: output_prefix, default: "demo/default" }
+        - { name: output_name,   default: "ngiab" }
+      artifacts:
+        - name: preprocess
+          path: /data/preprocess
+    script:
+      image: debian:trixie-slim
+      command: [bash, -lc]
+      source: |
+        set -euo pipefail
+        PREPROCESS_DIR="/data/preprocess"
+        CONFIG_DIR="${PREPROCESS_DIR}/config"
+        DEST_BUCKET="{{inputs.parameters.output_bucket}}"
+        DEST_PREFIX="{{inputs.parameters.output_prefix}}"
+        OUTPUT_NAME="{{inputs.parameters.output_name}}"
+
+        mkdir -p /tmp/out
+        DEST_PREFIX_TRIM="${DEST_PREFIX%/}"
+        if [ -n "${DEST_PREFIX_TRIM}" ]; then
+          TARGET_PREFIX="${DEST_PREFIX_TRIM}/${OUTPUT_NAME}"
+        else
+          TARGET_PREFIX="${OUTPUT_NAME}"
+        fi
+        S3_URL="s3://${DEST_BUCKET}/${TARGET_PREFIX}/"
+
+        printf "%s\n" "${DEST_BUCKET}" > /tmp/out/.s3_bucket
+        printf "%s/\n" "${TARGET_PREFIX}" > /tmp/out/.s3_key
+        printf "%s\n" "${S3_URL}" > /tmp/out/.s3_url
+
+        if ! command -v pmtiles >/dev/null 2>&1; then
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -y && apt-get install -y --no-install-recommends \
+            curl ca-certificates tar gzip && \
+            rm -rf /var/lib/apt/lists/*
+          TMPDIR="$(mktemp -d)"
+          trap 'rm -rf "${TMPDIR}"' EXIT
+          curl -fsSL "https://github.com/protomaps/go-pmtiles/releases/latest/download/go-pmtiles_1.28.1_Linux_x86_64.tar.gz" \
+            -o "${TMPDIR}/pmtiles.tar.gz"
+          tar -xzf "${TMPDIR}/pmtiles.tar.gz" -C "${TMPDIR}" pmtiles
+          install -m 0755 "${TMPDIR}/pmtiles" /usr/local/bin/pmtiles
+          trap - EXIT
+          rm -rf "${TMPDIR}"
+        fi
+
+        if [ ! -d "${CONFIG_DIR}" ]; then
+          echo "No config directory found at ${CONFIG_DIR}; skipping pmtiles conversion"
+          exit 0
+        fi
+
+        for MB in "${CONFIG_DIR}"/*.mbtiles; do
+          [ -f "${MB}" ] || continue
+          PM_OUT="${MB%.mbtiles}.pmtiles"
+          echo ">> Converting ${MB} to ${PM_OUT}"
+          pmtiles convert "${MB}" "${PM_OUT}" || echo "!! Failed to convert ${MB}" >&2
+        done
     outputs:
       parameters:
         - name: preprocess_bucket
@@ -321,13 +377,13 @@ spec:
           valueFrom: { path: /tmp/out/.s3_url }
       artifacts:
         - name: preprocess
-          path: /tmp/out/preprocess.tgz
+          path: /data/preprocess
           archive:
             none: {}
           s3:
             endpoint: s3.amazonaws.com
             region: us-east-1
             bucket: "{{inputs.parameters.output_bucket}}"
-            key: "{{inputs.parameters.output_prefix}}/{{inputs.parameters.output_name}}.tgz"
+            key: "{{inputs.parameters.output_prefix}}/{{inputs.parameters.output_name}}"
             accessKeySecret: { name: aws-creds, key: AWS_ACCESS_KEY_ID }
             secretKeySecret:  { name: aws-creds, key: AWS_SECRET_ACCESS_KEY }

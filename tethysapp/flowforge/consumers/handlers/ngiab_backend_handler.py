@@ -1,13 +1,15 @@
 # tethysapp/ngiab/consumers/ngiab_backend_handler.py
 import asyncio
+import json
 import logging
 import os
 import time
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from importlib import resources
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -138,6 +140,7 @@ async def _watch_workflow_nodes(
     self,
     argo_wf_name: str,
     tasks_by_node: dict[str, list[str]],  # {ui_node_id: [tname, ...]}
+    datasets_by_node: dict[str, list[dict]],
     wf_id,
 ) -> None:
     """
@@ -155,6 +158,7 @@ async def _watch_workflow_nodes(
 
     # Canonicalize expected names and provide a resolver for "<dag>.<task>"
     expected_by_node: dict[str, set[str]] = {k: set(v or []) for k, v in tasks_by_node.items()}
+    recorded_outputs: dict[str, set[str]] = defaultdict(set)
 
     def match_task(node_name: str, expected: set[str]) -> str | None:
         if node_name in expected:
@@ -209,6 +213,47 @@ async def _watch_workflow_nodes(
                     SessionFactory = await self.get_sessionmaker()
                     async with SessionFactory() as session:
                         await _update_node_db(session, wf_id, ui_node_id, ui, ui)
+                        if ui == "success":
+                            node = await _get_node_by_name(session, wf_id, ui_node_id)
+                            if node:
+                                pointers = datasets_by_node.get(ui_node_id) or []
+                                if not pointers:
+                                    user = _user_id(self)
+                                    pointers = [{
+                                        "dataset_bucket": _bucket(),
+                                        "dataset_key": f"{user}/{wf_id}/{argo_wf_name}/{ui_node_id}.tgz",
+                                        "dataset_prefix": f"{user}/{wf_id}/{argo_wf_name}/{ui_node_id}/",
+                                    }]
+
+                                for ptr in pointers:
+                                    bucket = ptr.get("dataset_bucket") or _bucket()
+                                    key = (ptr.get("dataset_key") or "").lstrip("/")
+                                    prefix_hint = (ptr.get("dataset_prefix") or "").lstrip("/")
+
+                                    if not key and not prefix_hint:
+                                        continue
+
+                                    normalized = key if key else prefix_hint.rstrip("/") + "/"
+                                    if normalized in recorded_outputs[ui_node_id]:
+                                        continue
+
+                                    extra_info = {
+                                        "workflow_id": str(wf_id),
+                                        "node_name": ui_node_id,
+                                        "argo_workflow": argo_wf_name,
+                                        "task": ptr.get("task"),
+                                    }
+                                    if prefix_hint:
+                                        extra_info["dataset_prefix"] = prefix_hint.rstrip("/") + "/"
+
+                                    await _record_virtual_output(
+                                        session,
+                                        node,
+                                        bucket,
+                                        normalized,
+                                        extra=extra_info,
+                                    )
+                                    recorded_outputs[ui_node_id].add(normalized)
 
             # If a node failed, fail all non-terminal siblings once and stop.
             if someone_failed:
@@ -277,6 +322,81 @@ async def _recompute_workflow_status(session: AsyncSession, wf_id):
     else:
         await _set_workflow_status(session, wf_id, "running")
         return "running"
+
+
+async def _record_virtual_output(
+    session: AsyncSession,
+    node: NodeModel,
+    bucket: str,
+    prefix: str,
+    extra: dict | None = None,
+):
+    if not bucket or not prefix:
+        return
+
+    sanitized = (prefix or "").lstrip("/")
+    if sanitized.endswith("/"):
+        normalized_key = sanitized.rstrip("/") + "/"
+        uri = f"s3://{bucket}/{normalized_key}"
+    else:
+        normalized_key = sanitized
+        uri = f"s3://{bucket}/{normalized_key}"
+
+    vo = VOModel(
+        node_id=node.id,
+        name=node.name,
+        storage_scheme="s3",
+        bucket=bucket,
+        object_key=normalized_key,
+        uri=uri,
+        extra=extra or {},
+    )
+    session.add(vo)
+    await session.commit()
+
+
+async def _store_runtime_metadata(
+    handler: MBH,
+    workflow_id: UUID,
+    argo_workflow_name: str,
+    tasks_by_node: dict[str, list[str]],
+    datasets_by_node: dict[str, list[dict]],
+):
+    SessionFactory = await handler.get_sessionmaker()
+    async with SessionFactory() as session:
+        wf = (
+            await session.execute(select(WFModel).where(WFModel.id == workflow_id))
+        ).scalar_one_or_none()
+        if wf:
+            metadata = {}
+            if wf.message:
+                try:
+                    metadata = json.loads(wf.message)
+                except Exception:
+                    metadata = {}
+            metadata["argo_workflow"] = argo_workflow_name
+            wf.message = json.dumps(metadata)
+
+        nodes = (
+            await session.execute(select(NodeModel).where(NodeModel.workflow_id == workflow_id))
+        ).scalars().all()
+        for node in nodes:
+            cfg = dict(node.config or {})
+            runtime = dict(cfg.get("_runtime") or {})
+            runtime["tasks"] = tasks_by_node.get(node.name, [])
+            runtime["datasets"] = datasets_by_node.get(node.name, [])
+            cfg["_runtime"] = runtime
+            node.config = cfg
+
+        await session.commit()
+
+
+async def _get_node_by_name(session: AsyncSession, wf_id, node_name: str) -> NodeModel | None:
+    return (
+        await session.execute(
+            select(NodeModel).where(NodeModel.workflow_id == wf_id, NodeModel.name == node_name)
+        )
+    ).scalar_one_or_none()
 
 def _phase_to_ui(phase: str | None) -> str:
     p = (phase or "").strip() or "Pending"
@@ -558,6 +678,30 @@ async def _update_node_db(session: AsyncSession, wf_id, node_name: str, status: 
         await session.commit()
 
 class NgiabBackendHandler(MBH):
+    def __init__(self, backend_consumer):
+        super().__init__(backend_consumer)
+        self._active_watchers: set[tuple[str, str]] = set()
+
+    def _launch_watcher(
+        self,
+        argo_wf_name: str,
+        tasks_by_node: dict[str, list[str]],
+        datasets_by_node: dict[str, list[dict]],
+        wf_id,
+    ) -> None:
+        key = (str(wf_id), argo_wf_name)
+        if key in self._active_watchers:
+            return
+
+        async def _run():
+            try:
+                await _watch_workflow_nodes(self, argo_wf_name, tasks_by_node, datasets_by_node, wf_id)
+            finally:
+                self._active_watchers.discard(key)
+
+        self._active_watchers.add(key)
+        asyncio.create_task(_run())
+
     @property
     def receiving_actions(self) -> dict[str, callable]:
         actions = {
@@ -862,6 +1006,7 @@ class NgiabBackendHandler(MBH):
 
         with Workflow(generate_name="ngiab-chain-", entrypoint="main", workflows_service=ws) as w:
             tasks_by_node: dict[str, list[str]] = {nid: [] for nid in node_ids}
+            datasets_by_node: dict[str, list[dict]] = {nid: [] for nid in node_ids}
             with DAG(name="main"):
                 instances_by_node: dict[str, list[dict]] = {}
 
@@ -921,8 +1066,9 @@ class NgiabBackendHandler(MBH):
                             created.append(pointer)
 
                         instances_by_node[nid] = created
+                        datasets_by_node[nid] = created
 
-        return w, tasks_by_node
+        return w, tasks_by_node, datasets_by_node
 
 
     @MBH.action_handler
@@ -937,15 +1083,49 @@ class NgiabBackendHandler(MBH):
         if not wf:
             raise ValueError("Workflow not found")
 
+        node_rows = (
+            await session.execute(select(NodeModel).where(NodeModel.workflow_id == wf.id))
+        ).scalars().all()
+        node_map = {row.name: row for row in node_rows}
+
         nodes, edges = [], []
         if wf.graph and isinstance(wf.graph, dict):
             nodes = list(wf.graph.get("nodes") or [])
             edges = list(wf.graph.get("edges") or [])
+            for n in nodes:
+                node_id = str(n.get("id"))
+                row = node_map.get(node_id)
+                if row:
+                    n["status"] = row.status
+                    existing_cfg = n.get("config") or {}
+                    n["config"] = {**existing_cfg, **(row.config or {})}
         else:
             # Fallback: reconstruct nodes from Node table; edges unknown
-            nrows = (await session.execute(select(NodeModel).where(NodeModel.workflow_id == wf.id))).scalars().all()
-            nodes = [{"id": n.name, "label": n.kind, "config": n.config or {}, "status": n.status} for n in nrows]
+            nodes = [
+                {
+                    "id": n.name,
+                    "label": n.kind,
+                    "config": n.config or {},
+                    "status": n.status,
+                }
+                for n in node_rows
+            ]
             edges = []
+
+        runtime_tasks = {}
+        runtime_datasets = {}
+        for row in node_rows:
+            runtime = (row.config or {}).get("_runtime") or {}
+            runtime_tasks[row.name] = runtime.get("tasks") or []
+            runtime_datasets[row.name] = runtime.get("datasets") or []
+
+        argo_name = None
+        if wf.message:
+            try:
+                meta = json.loads(wf.message)
+                argo_name = meta.get("argo_workflow")
+            except Exception:
+                argo_name = None
 
         payload = {
             "workflow": {"id": wf.id, "name": wf.name, "status": wf.status},
@@ -954,6 +1134,9 @@ class NgiabBackendHandler(MBH):
             "count": {"nodes": len(nodes), "edges": len(edges)},
         }
         await self.send_action(BackendActions.WORKFLOW_GRAPH, payload)
+
+        if wf.status in {"running", "queued"} and argo_name and any(runtime_tasks.values()):
+            self._launch_watcher(argo_name, runtime_tasks, runtime_datasets, wf.id)
 
     @MBH.action_handler
     async def receive_list_workflows(self, event, action, data, session: AsyncSession):
@@ -1111,11 +1294,11 @@ class NgiabBackendHandler(MBH):
 
         # Build the DAG with fan-out semantics (per-parent instances) and submit
         try:
-            # w, tasks_by_node = self._build_chain_workflow(chain_nodes, user, wf_uuid=str(wf_row.id), edges=edges_kept)
-            w, tasks_by_node = self._build_chain_workflow(
+            w, tasks_by_node, datasets_by_node = self._build_chain_workflow(
                 chain_nodes, user, wf_uuid=str(wf_row.id), edges=edges_kept, mode=mode
-            )            
+            )
             w.create()
+            await _store_runtime_metadata(self, wf_row.id, w.name, tasks_by_node, datasets_by_node)
             # mark the workflow row as running and set last_run_at
             await _set_workflow_status(session, wf_row.id, "running", touch_last_run=True)
             
@@ -1124,7 +1307,7 @@ class NgiabBackendHandler(MBH):
                 node_id = node.get("id") or (node.get("label") or "")
                 await _emit_status(self, node_id, "running", f"argo: {w.name}")
             # ...then start ONE watcher that attributes phases to the right UI node
-            asyncio.create_task(_watch_workflow_nodes(self, w.name, tasks_by_node, wf_row.id))
+            self._launch_watcher(w.name, tasks_by_node, datasets_by_node, wf_row.id)
 
 
         except Exception as e:
@@ -1264,4 +1447,3 @@ class NgiabBackendHandler(MBH):
             event, action,
             {"nodeId": "teehr", "label": "teehr", "config": cfg}
         )
-
