@@ -592,7 +592,7 @@ export default function WorkflowsView({ sidebarVisible = true } = {}) {
           <LayersPreview />
         </CanvasColumn>
       </Layout>
-      <ToastContainer position="top-right" />
+      <ToastContainer position="top-center" />
     </WorkflowsProvider>
   );
 }

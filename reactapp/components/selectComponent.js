@@ -2,9 +2,8 @@ import React, { Component, useCallback } from 'react';
 import Select, { createFilter } from 'react-select';
 import { FixedSizeList as List } from 'react-window';
 
-const height = 35;
+const ROW_HEIGHT = 35;
 
-// Ensure the react-window scroller never shows a horizontal scrollbar
 const Outer = React.forwardRef((props, ref) => (
   <div ref={ref} {...props} style={{ ...props.style, overflowX: 'hidden' }} />
 ));
@@ -12,28 +11,30 @@ const Outer = React.forwardRef((props, ref) => (
 class MenuList extends Component {
   render() {
     const { options, children, maxHeight, getValue } = this.props;
+    const renderedChildren = React.Children.toArray(children);
     const [value] = getValue();
-    const initialOffset = options.indexOf(value) * height;
+    const initialOffset = Math.max(options.indexOf(value), 0) * ROW_HEIGHT;
 
-    // Dynamically adjust maxHeight
-    const adjustedHeight = Math.min(children.length * height, maxHeight);
+    const itemCount = renderedChildren.length;
+    const adjustedHeight = Math.min(itemCount * ROW_HEIGHT || ROW_HEIGHT, maxHeight);
 
     return (
       <List
         height={adjustedHeight}
-        itemCount={children.length}
-        itemSize={height}
+        itemCount={itemCount}
+        itemSize={ROW_HEIGHT}
         initialScrollOffset={initialOffset}
         outerElementType={Outer}
-        width={'100%'}   // fill the menu; keeps layout stable
+        width="100%"
       >
-        {({ index, style }) => <div style={style}>{children[index]}</div>}
+        {({ index, style }) => (
+          <div style={style}>{renderedChildren[index]}</div>
+        )}
       </List>
     );
   }
 }
 
-// Custom styles for react-select
 const customStyles = {
   menuPortal: (base) => ({ ...base, zIndex: 9999 }),
   menu: (provided) => ({
@@ -55,11 +56,7 @@ const customStyles = {
   }),
 };
 
-const SelectComponent = ({ 
-  optionsList,
-  onChangeHandler, 
-  
-}) => {
+const SelectComponent = ({ optionsList, onChangeHandler }) => {
   const handleChange = useCallback((option) => {
     onChangeHandler([option]);
   }, [onChangeHandler]);
@@ -71,7 +68,7 @@ const SelectComponent = ({
       filterOption={createFilter({ ignoreAccents: false })}
       options={optionsList}
       onChange={handleChange}
-      menuPortalTarget={document.body}
+      menuPortalTarget={typeof document !== 'undefined' ? document.body : null}
       menuShouldScrollIntoView={false}
       menuPosition="fixed"
     />

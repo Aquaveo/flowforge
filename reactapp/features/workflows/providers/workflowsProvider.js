@@ -6,6 +6,8 @@ import dagre from 'dagre';
 import { AppContext } from 'context/context';
 import { toast } from 'react-toastify';
 
+const LAST_SELECTED_WORKFLOW_KEY = 'flowforge:lastWorkflowId';
+
 // ---- helpers (unchanged dagre + cycle) ----
 function createsCycle(source, target, edges) {
   if (source === target) return true;
@@ -58,6 +60,11 @@ export function WorkflowsProvider({ children }) {
   const [state, dispatch] = useReducer(workflowsReducer, initialState);
   const { backend } = useContext(AppContext);
   const [uiMode, setUiMode] = useState('real');
+  const stateRef = useRef(state);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   // local helpers to mirror reducer behavior
   const labelFor = (kind) => {
@@ -143,6 +150,36 @@ export function WorkflowsProvider({ children }) {
     const onWorkflowsList = (payload) => {
       dispatch({ type: types.WS_MESSAGE, payload: { type: 'WORKFLOWS_LIST', ...payload } });
       toast.success(`Loaded ${payload?.count ?? 0} workflows`);
+
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      let targetId = null;
+      try {
+        const stored = window.localStorage?.getItem(LAST_SELECTED_WORKFLOW_KEY);
+        if (stored && items.some((w) => String(w.id) === stored)) {
+          targetId = stored;
+        }
+      } catch (err) {
+        console.warn('Unable to read stored workflow id', err);
+      }
+
+      if (!targetId) {
+        const running = items.find((w) => {
+          const status = String(w.status || '').toLowerCase();
+          return status === 'running' || status === 'queued';
+        });
+        if (running) {
+          targetId = String(running.id);
+        }
+      }
+
+      if (!targetId && items[0]) {
+        targetId = String(items[0].id);
+      }
+
+      const currentSelected = stateRef.current?.ui?.selectedWorkflowId;
+      if (targetId && targetId !== currentSelected) {
+        setSelectedWorkflow(targetId);
+      }
     };
 
     const onWorkflowGraph = (payload) => {
@@ -223,6 +260,19 @@ export function WorkflowsProvider({ children }) {
     const edges = state.edges.map(e => ({ source: e.source, target: e.target }));
     const selectedIds = state.nodes.filter(n => n.selected).map(n => n.id);
 
+    const selectedWorkflowId = state.ui?.selectedWorkflowId;
+    if (selectedWorkflowId) {
+      const existing = state.workflows.find(
+        (wf) => String(wf.id) === String(selectedWorkflowId)
+      );
+      const status = String(existing?.status || '').toLowerCase();
+      if (existing && (status === 'running' || status === 'queued')) {
+        toast.warning('The selected workflow is still running. Please wait for it to finish before launching another run.');
+        dispatch({ type: types.WS_ERROR, payload: 'Workflow already running' });
+        return;
+      }
+    }
+
     // Full-run rule: require weak connectivity (single component)
     if (selectedIds.length === 0) {
       if (!isWeaklyConnected(state.nodes, state.edges)) {
@@ -234,7 +284,7 @@ export function WorkflowsProvider({ children }) {
     const payload = {
       workflow: { nodes, edges },
       selected: selectedIds,
-      workflowId: state.ui?.selectedWorkflowId || null,
+      workflowId: selectedWorkflowId || null,
       mode: uiMode,
     };
 
@@ -259,12 +309,21 @@ export function WorkflowsProvider({ children }) {
 
   const startPlayback = () => dispatch({ type: types.PLAYBACK_START });
   const resetPlayback = () => dispatch({ type: types.PLAYBACK_RESET });
-  const setSelectedWorkflow = (id) =>
-    {
-      dispatch({ type: types.SET_SELECTED_WORKFLOW, payload: id });
-      // ask backend for the graph
+  const setSelectedWorkflow = (id) => {
+    dispatch({ type: types.SET_SELECTED_WORKFLOW, payload: id });
+    try {
+      if (id) {
+        window.localStorage?.setItem(LAST_SELECTED_WORKFLOW_KEY, String(id));
+      } else {
+        window.localStorage?.removeItem(LAST_SELECTED_WORKFLOW_KEY);
+      }
+    } catch (err) {
+      console.warn('Unable to persist selected workflow id', err);
+    }
+    if (id) {
       try { backend?.do(backend?.actions?.GET_WORKFLOW ?? 'GET_WORKFLOW', { id }); } catch {}
     }
+  };
   // timer for playback
   const timerRef = useRef(null);
   useEffect(() => {

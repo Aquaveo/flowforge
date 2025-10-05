@@ -89,9 +89,11 @@ export default class Backend {
       this._emit("WS_CONNECTED", {});
 
       if (this.isReconnecting) {
-        toast.dismiss(this.reconnectToastId);
+        if (toast.isActive(this.reconnectToastId)) {
+          toast.dismiss(this.reconnectToastId);
+        }
         toast.success("Successfully reconnected to the backend!", {
-          position: "top-right",
+          position: "top-center",
           autoClose: 3000,
           hideProgressBar: false,
           closeOnClick: true,
@@ -156,11 +158,13 @@ export default class Backend {
   reconnect() {
     // cap at ~5m 20s
     if (this.reconnectInterval >= 320000) {
-      toast.dismiss(this.reconnectToastId);
+      if (toast.isActive(this.reconnectToastId)) {
+        toast.dismiss(this.reconnectToastId);
+      }
       toast.error(
         "Could not reconnect to the backend in time. Refresh the page to try again.",
         {
-          position: "top-right",
+          position: "top-center",
           autoClose: false,
           hideProgressBar: true,
           closeOnClick: false,
@@ -174,7 +178,7 @@ export default class Backend {
     }
     if (!toast.isActive(this.reconnectToastId)) {
       toast.warning("WebSocket connection lost, attempting to reconnect...", {
-        position: "top-right",
+        position: "top-center",
         autoClose: false,
         hideProgressBar: true,
         closeOnClick: false,

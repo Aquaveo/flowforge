@@ -54,7 +54,7 @@ const NGIABView = () => {
     <ViewContainer>
       <ModelRunsProvider>
         <HydroFabricProvider>
-          <ToastContainer stacked />
+          <ToastContainer stacked position="top-center" />
           <MapExperience
             singleRowOn={singleRowOn}
             toggleSingleRow={toggleSingleRow}

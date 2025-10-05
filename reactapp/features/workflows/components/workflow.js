@@ -64,6 +64,7 @@ const NODE_FORMS = {
     { name: 'run',            label: 'Run NGIAB (--run)', type: 'select', options: ['false', 'true'] },
     { name: 'validate',       label: 'Validate (--validate)', type: 'select', options: ['false', 'true'] },
     // S3 destination
+    { name: 'customize_output_path', label: 'Customize output path', type: 'toggle' },
     { name: 'output_bucket',  label: 'S3 bucket', type: 'text' },
     { name: 'output_prefix',  label: 'S3 prefix', type: 'text' },
   ],
