@@ -131,15 +131,30 @@ const ModelRunsSelect = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.model_runs, state.current_model_runs, state.base_model_id]);
 
+  const getVirtualOutput = useCallback((run) => {
+    if (!run) return;
+    console.log("fetching geometries for run", run);
+    const last_node = run.nodes.length > 0 ? run.nodes[run.nodes.length -1] : null;
+    const last_virtual_output = last_node.virtual_outputs.length > 0 ? last_node.virtual_outputs[last_node.virtual_outputs.length -1] : null;
+    return last_virtual_output
+  }, []);
+
   const handleSelectRun = useCallback((run) => {
     if (!run) return;
     actions.set_current_model_runs([run]);
+    // get the geometries
+    const virtual_output = getVirtualOutput(run)
+    const virtual_output_url = virtual_output?.uri + '/config/ngiab_subset.pmtiles'; //this is a patch..
+    //patch again
+    const patched_vo_url = virtual_output_url.replace('s3://ngiab/','https://ngiab.s3.us-east-1.amazonaws.com/')
+    // console.log("virtual_output_url run",virtual_output_url, patched_vo_url);
+
+    hydroFabricActions.set_geometry_url(patched_vo_url);
     const runId = getRunId(run);
     if (runId && runId !== state.base_model_id) {
       actions.set_base_model_id(runId);
     }
-    hydroFabricActions.reset();
-  }, [actions, state.base_model_id, hydroFabricActions]);
+  }, [state.base_model_id]);
 
 
 
@@ -183,7 +198,7 @@ const ModelRunsSelect = ({
     }, 600);
 
     return () => clearInterval(interval);
-  }, [isopen, backend]);
+  }, [isopen]);
 
   return (
     <Fragment>

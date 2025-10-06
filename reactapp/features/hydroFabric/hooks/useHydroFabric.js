@@ -7,6 +7,13 @@ const useHydroFabric = () => {
   const [state, dispatch] = useReducer(hydroFabricReducer, hydroFabricInitialStore);
 
   const actions = {
+    // Geometry
+    set_geometry: (geometry) =>
+      dispatch({ type: hydroFabricActionsTypes.set_geometry, payload: geometry }),
+    set_geometry_map_style: (mapStyle) =>
+      dispatch({ type: hydroFabricActionsTypes.set_geometry_map_style, payload: mapStyle }),
+    set_geometry_url: (url) =>
+      dispatch({ type: hydroFabricActionsTypes.set_geometry_url, payload: url }),
     set_nexus_id: (id) =>
       dispatch({ type: hydroFabricActionsTypes.set_nexus_id, payload: id }),
     set_nexus_series: (series) =>

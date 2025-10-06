@@ -2,6 +2,10 @@ import { hydroFabricActionsTypes } from '../actions/actionsTypes';
 
 const hydroFabricInitialStore = {
   state: {
+    geometry: {
+      mapStyle: '',
+      url: ''
+    },
     nexus: {
       id: null,
       list: null,
@@ -71,9 +75,28 @@ const hydroFabricInitialStore = {
 const hydroFabricReducer = (state, action) => {
   switch (action.type) {
 
-    // -----------------------------
-    // NEXUS
-    // -----------------------------
+    case hydroFabricActionsTypes.set_geometry_map_style:
+      return {
+        ...state,
+        state: {
+          ...state.state,
+          geometry: {
+            ...state.state.geometry,
+            mapStyle: action.payload
+          }
+        }
+      };
+    case hydroFabricActionsTypes.set_geometry_url:
+      return {
+        ...state,
+        state: {
+          ...state.state,
+          geometry: {
+            ...state.state.geometry,
+            url: action.payload
+          }
+        }
+      };
     case hydroFabricActionsTypes.set_nexus_id:
       return {
         ...state,

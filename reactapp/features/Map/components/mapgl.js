@@ -2,11 +2,9 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import maplibregl from 'maplibre-gl';
 import Map, { Source, Layer } from 'react-map-gl/maplibre';
 import { Protocol } from 'pmtiles';
-import appAPI from 'services/api/app';
 import { useHydroFabricContext } from 'features/hydroFabric/hooks/useHydroFabricContext';
 import { useModelRunsContext } from 'features/ModelRuns/hooks/useModelRunsContext';
 import useTheme from 'hooks/useTheme';
-import { toast } from 'react-toastify';
 
 // Register PMTiles protocol once at module scope
 const _pmtilesProtocol = new Protocol({ metadata: true });
@@ -49,6 +47,8 @@ const onMapLoad = (event) => {
 
 const MapComponent = () => {
   const { state: hydroFabricState, actions: hydroFabricActions } = useHydroFabricContext();
+  console.log(hydroFabricState.geometry)
+
   const { state: modelRunsState } = useModelRunsContext();
   const theme = useTheme();
   const mapRef = useRef(null);
@@ -57,8 +57,7 @@ const MapComponent = () => {
   const [selectedNexusId, setSelectedNexusId] = useState(null);
   const [selectedCatchmentId, setSelectedCatchmentId] = useState(null);
 
-  // data / filters (from API)
-  const [nexusPoints, setNexusPoints] = useState(null); // kept for bounds + legacy, not used for drawing
+
   const [catchmentsFilterIds, setCatchmentsFilterIds] = useState(null);
   const [flowPathsFilterIds, setFlowPathsFilterIds] = useState(null);
   const [nexusFilterIds, setNexusFilterIds] = useState(null);
@@ -68,10 +67,31 @@ const MapComponent = () => {
   const isNexusHidden = hydroFabricState.nexus.geometry.hidden;
   const isCatchmentHidden = hydroFabricState.catchment.geometry.hidden;
 
-  const mapStyleUrl =
-    theme === 'dark'
+  const mapStyleUrl = (() => {
+    const override = (hydroFabricState.geometry?.mapStyle || '').trim();
+    if (override) return override;
+    return theme === 'dark'
       ? 'https://communityhydrofabric.s3.us-east-1.amazonaws.com/map/styles/dark-style.json'
       : 'https://communityhydrofabric.s3.us-east-1.amazonaws.com/map/styles/light-style.json';
+  })();
+
+  // const ngiobPmtilesUrl = useMemo(() => {
+  //   console.log("geometry url", hydroFabricState.geometry.url);
+  //   const raw = (hydroFabricState.geometry?.url || '').trim();
+  //   if (!raw) {
+  //     return raw;
+  //   }
+  //   if (raw.startsWith('pmtiles://')) {
+  //     return raw;
+  //   }
+  //   return `pmtiles://${raw}`;
+  // }, [hydroFabricState.geometry.url]);
+
+  const ngiobPmtilesUrl = useMemo(() => {
+    const raw = (hydroFabricState.geometry?.url || '').trim();
+    if (!raw) return null;
+    return raw.startsWith('pmtiles://') ? raw : `pmtiles://${raw}`;
+  }, [hydroFabricState.geometry?.url]);
 
   // helper: normalize id arrays to strings for robust GL filters
   const asStr = (arr) => (Array.isArray(arr) ? arr.map((v) => String(v)) : []);
@@ -190,8 +210,7 @@ const MapComponent = () => {
 
   // NEW: ngiab catchments/flowpaths from PMTiles
   const ngiabCatchmentConfig = useMemo(() => {
-    if (!catchmentsFilterIds) return null;
-    const ids = asStr(catchmentsFilterIds);
+    const ids = asStr(catchmentsFilterIds || []);
     const attr = [
       'coalesce',
       ['to-string', ['get', 'divide_id']],
@@ -202,7 +221,7 @@ const MapComponent = () => {
     ];
     const filter = ids.length
       ? ['match', attr, ['literal', ids], true, false]
-      : null;
+      : undefined;
 
     return {
       id: 'catchments-layer-ng',
@@ -266,43 +285,6 @@ const MapComponent = () => {
     };
   }, [flowPathsFilterIds, theme]);
 
-  // fetch geospatial ids + bounds
-  useEffect(() => {
-    if (!modelRunsState.base_model_id) return;
-
-    appAPI.getGeoSpatialData({ model_run_id: modelRunsState.base_model_id })
-      .then((response) => {
-        if (response.error) {
-          toast.error("Error fetching Model Run Data", { autoClose: 1000 });
-          hydroFabricActions.reset();
-          setNexusPoints(null);
-          setCatchmentsFilterIds(null);
-          setFlowPathsFilterIds(null);
-          setNexusFilterIds(null);
-          setSelectedCatchmentId(null);
-          setSelectedNexusId(null);
-          return;
-        }
-
-        toast.success("Successfully retrieved Model Run Data", { autoClose: 1000 });
-        setNexusPoints(response.nexus);
-        setCatchmentsFilterIds(response.catchments);
-        setFlowPathsFilterIds(response.flow_paths_ids);
-        setNexusFilterIds(response.nexus_ids);
-
-        if (response.bounds && mapRef.current) {
-          mapRef.current.fitBounds(response.bounds, {
-            padding: 20,
-            duration: 1000,
-          });
-        }
-      })
-      .catch((error) => {
-        console.error('Geospatial data fetch failed:', error);
-      });
-
-    // no protocol cleanup – keep global registration
-  }, [theme, modelRunsState.base_model_id, hydroFabricActions]);
 
   // clicks
   const handleMapClick = async (event) => {
@@ -398,15 +380,13 @@ const MapComponent = () => {
       </Source>
 
       {/* New NGIAB PMTiles source (divides, flowpaths, nexus) */}
-      <Source
-        id="ngiab"
-        type="vector"
-        url="pmtiles://https://ngiab.s3.us-east-1.amazonaws.com/config/ngiab_subset.pmtiles"
-      >
-        {ngiabCatchmentConfig && <Layer {...ngiabCatchmentConfig} />}
-        {ngiabFlowPathsConfig && <Layer {...ngiabFlowPathsConfig} />}
-        {nexusLayers}
-      </Source>
+      {ngiobPmtilesUrl && (
+        <Source id="ngiab" key={ngiobPmtilesUrl} type="vector" url={ngiobPmtilesUrl}>
+          {ngiabCatchmentConfig && <Layer {...ngiabCatchmentConfig} />}
+          {ngiabFlowPathsConfig && <Layer {...ngiabFlowPathsConfig} />}
+          {nexusLayers}
+        </Source>
+      )}
     </Map>
   );
 };

@@ -119,10 +119,12 @@ export default function FlowForgeExperience() {
 
       <PanelsWrapper>
         <Panel $visible={activeTab === 'workflows'}>
-          <WorkflowsView sidebarVisible={activeTab === 'workflows'} />
+          {activeTab === 'workflows' ? (
+            <WorkflowsView sidebarVisible={true} />
+          ) : null}
         </Panel>
         <Panel $visible={activeTab === 'map'}>
-          <NGIABView />
+          {activeTab === 'map' ? <NGIABView /> : null}
         </Panel>
       </PanelsWrapper>
     </Container>

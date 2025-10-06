@@ -1,6 +1,10 @@
 // src/features/hydroFabric/store/actions/actionsTypes.js
 
 const hydroFabricActionsTypes = {
+    set_geometry: 'SET_GEOMETRY',
+    set_geometry_map_style: 'SET_GEOMETRY_MAP_STYLE',
+    set_geometry_url: 'SET_GEOMETRY_URL',
+
     set_nexus_id: 'SET_NEXUS_ID',
     set_nexus_list: 'SET_NEXUS_LIST',
     set_nexus_series: 'SET_NEXUS_SERIES',
