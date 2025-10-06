@@ -139,6 +139,7 @@ def getGeoSpatialData(request):
 
 @controller
 def getNexusTimeSeries(request):
+    # breakpoint()
     model_run_id = request.GET.get("model_run_id")
     nexus_id = request.GET.get("nexus_id")
     base_output_path = get_base_output(model_run_id)

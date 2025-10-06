@@ -19,7 +19,7 @@ from hera.shared import global_config
 
 from ..backend_actions import BackendActions
 from .model_run_handler import ModelBackendHandler as MBH
-from ...model import Workflow as WFModel, Node as NodeModel, WorkflowTemplate as WTModel
+from ...model import Workflow as WFModel, Node as NodeModel, WorkflowTemplate as WTModel, VirtualOutput as VOModel
 
 log = logging.getLogger(__name__)
 
@@ -221,14 +221,14 @@ async def _watch_workflow_nodes(
                                     user = _user_id(self)
                                     pointers = [{
                                         "dataset_bucket": _bucket(),
-                                        "dataset_key": f"{user}/{wf_id}/{argo_wf_name}/{ui_node_id}.tgz",
+                                        "dataset_key": f"{user}/{wf_id}/{argo_wf_name}/{ui_node_id}",
                                         "dataset_prefix": f"{user}/{wf_id}/{argo_wf_name}/{ui_node_id}/",
                                     }]
 
                                 for ptr in pointers:
                                     bucket = ptr.get("dataset_bucket") or _bucket()
-                                    key = (ptr.get("dataset_key") or "").lstrip("/")
-                                    prefix_hint = (ptr.get("dataset_prefix") or "").lstrip("/")
+                                    key = _resolve_workflow_name_placeholder(ptr.get("dataset_key"), argo_wf_name).lstrip("/")
+                                    prefix_hint = _resolve_workflow_name_placeholder(ptr.get("dataset_prefix"), argo_wf_name).lstrip("/")
 
                                     if not key and not prefix_hint:
                                         continue
@@ -384,7 +384,16 @@ async def _store_runtime_metadata(
             cfg = dict(node.config or {})
             runtime = dict(cfg.get("_runtime") or {})
             runtime["tasks"] = tasks_by_node.get(node.name, [])
-            runtime["datasets"] = datasets_by_node.get(node.name, [])
+            if datasets_by_node.get(node.name):
+                resolved = []
+                for ptr in datasets_by_node.get(node.name, []):
+                    cleaned = dict(ptr)
+                    cleaned["dataset_key"] = _resolve_workflow_name_placeholder(cleaned.get("dataset_key"), argo_workflow_name)
+                    cleaned["dataset_prefix"] = _resolve_workflow_name_placeholder(cleaned.get("dataset_prefix"), argo_workflow_name)
+                    resolved.append(cleaned)
+                runtime["datasets"] = resolved
+            else:
+                runtime["datasets"] = []
             cfg["_runtime"] = runtime
             node.config = cfg
 
@@ -521,6 +530,16 @@ def _job_root_prefix(user: str, wf_uuid: str) -> str:
     # user/<workflow-uuid>/<argo-job-name>
     # NOTE: {{workflow.name}} is resolved by Argo at runtime.
     return f"{user}/{wf_uuid}/{{{{workflow.name}}}}"
+
+
+def _resolve_workflow_name_placeholder(value: str | None, argo_wf_name: str) -> str:
+    if not value:
+        return ""
+    return (
+        str(value)
+        .replace("{{workflow.name}}", argo_wf_name)
+        .replace("{{ workflow.name }}", argo_wf_name)
+    )
 
 
 def _params_for(

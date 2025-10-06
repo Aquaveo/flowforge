@@ -66,7 +66,7 @@ class HomeImportHandler(MBH):
             "config": node.config,
             "created_at": node.created_at.isoformat() if node.created_at else None,
             "updated_at": node.updated_at.isoformat() if node.updated_at else None,
-            "virtual_outputs": [HomeImportHandler._serialize_virtual_output(vo) for vo in node.virtual_outputs],
+            "virtual_outputs": [HomeImportHandler._serialize_virtual_output(vo) for vo in node.virtual_outputs]
         }
 
 
